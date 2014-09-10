@@ -48,3 +48,6 @@ DerivedData/
 
 .DS_Store
 
+xcschememanagement.plist
+xcdebugger/
+Breakpoints_v2.xcbkptlist
