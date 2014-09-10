@@ -14,19 +14,22 @@
 #define rows 26
 #define cols 59
 
+
+//************************************** PROTOTYPES **************************
 void    parse_command_line(int argc, const char *argv[], char listfile[], char basename[]);
 void    terminate_with_error( char message[]);
 void    write_i2_array( unsigned short array[], int nelements, char filename[]);
 
 
+//************************************** GLOBALS **************************
 double  D = 228.0;      // distance between surfaces of LYSO arrays
 double  CA = 3.5;       // cone angle in degrees;
 int		keVmin = 400;
 int		keVmax = 650;
 double  acqtime=1200.0; // acquisition time in minutes
 
-// simple change test
 
+//************************************** MAIN **************************
 int main(int argc, const char * argv[])
 {
     char 	listfile[255], filename[255], basename[255];
