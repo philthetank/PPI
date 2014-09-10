@@ -54,14 +54,13 @@ int main(int argc, const char * argv[])
 //************************************** parse_command_line **************************
 void parse_command_line(int argc, const char *argv[], char listfile[], char basename[])
 {
-    int	 i, nrd=0;
     // command line must specify list file name first and it must be followed
     //    by the other parameters
     // e.g.  ./listproc LYSOtest.bin -a400 -b650
     
     //	printf("argc = %d\n", argc);
     if( argc > 1) {
-        nrd = sscanf( &argv[1][0], "%s", &listfile[0]);
+        int nrd = sscanf( &argv[1][0], "%s", &listfile[0]);
         if(nrd > 0)
             printf("Filename = %s\n", listfile);
         else
@@ -71,36 +70,38 @@ void parse_command_line(int argc, const char *argv[], char listfile[], char base
     // basename = list file name without extension
     strcpy(basename, listfile);
     strtok(basename,".");
+    
     puts(basename);
     puts(listfile);
     
+    char message[255];
     
-    for (i=2; i<argc; i++)   {
+    for (int i=2; i<argc; i++)   {
         if (argv[i][0] == '-')  {
             switch(argv[i][1])  {
-                case 'a':								// lower threshold
+                case 'a':								// lower threshold (must be above a, in keV)
                     keVmin = atoi(&argv[i][2]);
                     printf("lower threshold (keV) = %3d\n", keVmin);
                     break;
-                case 'b':
+                case 'b':                               // upper threshold (must be below b, in keV)
                     keVmax = atoi(&argv[i][2]);
                     printf("upper threshold (keV) = %3d\n", keVmax);
                     break;
-                case 'C':
+                case 'C':                               // cone angle (in degrees)
                     sscanf(&argv[i][2],"%lf", &CA);
                     printf("cone angle =%6.2lf degrees\n", CA);
                     break;
-                case 'D':
+                case 'D':                               // distance (in millimeters)
                     sscanf(&argv[i][2],"%lf", &D);
                     printf("distance between crystal surfaces =%8.2lf mm\n", D);
                     break;
-                case 'm':
-                    sscanf(&argv[i][2],"%lf", &acqtime);   //acqtime in minutes
+                case 'm':                               // acquisition time in minutes
+                    sscanf(&argv[i][2],"%lf", &acqtime);
                     printf("acquisition time = %6.1lf minutes\n", acqtime);
                     break;
                 default:
-                    printf("parse_command_line found unknown argument(s)!  arg =%c\n", argv[i][1]);
-                    exit(-1);
+                    sprintf(message, "parse_command_line found unknown argument(s)!  arg =%c\n", argv[i][1]);
+                    terminate_with_error(message);
             }
         }
     }
@@ -109,12 +110,10 @@ void parse_command_line(int argc, const char *argv[], char listfile[], char base
 //************************************** terminate with error **************************
 void terminate_with_error( char message[])
 {
-    FILE *fp;
-    
     puts(" ");
     puts(message);
     
-    fp = fopen("PPI_error_message.txt","w");
+    FILE *fp = fopen("PPI_error_message.txt","w");
     fprintf(fp, "%s\n",message);
     fclose(fp);
     //	sleep(5);
