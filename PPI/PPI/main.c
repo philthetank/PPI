@@ -25,6 +25,7 @@ int		keVmin = 400;
 int		keVmax = 650;
 double  acqtime=1200.0; // acquisition time in minutes
 
+// simple change test
 
 int main(int argc, const char * argv[])
 {
