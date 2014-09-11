@@ -58,7 +58,8 @@ void parse_command_line(int argc, const char *argv[], char listfile[], char base
     // e.g.  ./listproc LYSOtest.bin -a400 -b650
     
     if(argc > 1) {
-        int nrd = sscanf( &argv[1][0], "%s", &listfile[0]);
+        int nrd = sscanf( &argv[1][0], "%[^\t\n]", &listfile[0]);
+        
         if(nrd > 0) {
             printf("Filename = %s\n", listfile);
             
