@@ -29,7 +29,6 @@ void    parse_command_line(int argc, const char *argv[], char listfile[], char b
 void    terminate_with_error( char message[]);
 void    write_i2_array( unsigned short array[], int nelements, char filename[]);
 
-
 //************************************** GLOBALS **************************
 double  D = 228.0;      // distance between surfaces of LYSO arrays
 double  CA = 3.5;       // cone angle in degrees;
@@ -41,9 +40,19 @@ double  acqtime= 1200.0; // acquisition time in minutes
 int main(int argc, const char * argv[])
 {
     char listfile[255], filename[255], basename[255];
+    
     unsigned short rawimageD1[DETECTOR_ROWS * DETECTOR_COLS];
     unsigned short rawimageD2[DETECTOR_ROWS * DETECTOR_COLS];
     unsigned short proj_image[PROJECTOR_ROWS * PROJECTOR_COLS];
+    
+    for ( int i = 0; i < DETECTOR_ROWS * DETECTOR_COLS; i++ ) {
+        rawimageD1[i] = 0;
+        rawimageD2[i] = 0;
+    }
+
+    for ( int i = 0; i < PROJECTOR_ROWS * PROJECTOR_COLS; i++ ) {
+        proj_image[i] = 0;
+    }
     
     // get input data file name
     parse_command_line( argc, argv, listfile, basename);
@@ -51,56 +60,68 @@ int main(int argc, const char * argv[])
     
     // open file
     FILE *fp = fopen( listfile, "rb");
-    if (fp) {
+    if ( fp ) {
         int eventblock[EVENTBLOCK_SIZE];
-        const int acqtimeMinutes = acqtime * 60;
+        const double acqtimeseconds = acqtime * 60;
         char message[255];
-        while ( fread(&eventblock, EVENTBLOCK_SIZE, 1, fp) >= 3 ) {
+        int loopcount = 0;
+        
+        while ( fread(&eventblock, sizeof(int), 3, fp) == 3 ) {
+            // get time, check if valid
             int time = eventblock[0];
-            if ( time <= acqtimeMinutes ) {
-                int crystalindex1 = eventblock[1] & 0x00FF;
-                int crystalindex2 = eventblock[2] & 0x00FF;
-                
-                if ( crystalindex1 > MAX_INDEX ) {
-                    sprintf(message, "Crystal Index #1 is out of bounds. Should be less than %d, but is %d\n", MAX_INDEX, crystalindex1);
-                    terminate_with_error(message);
-                }
-                
-                if ( crystalindex2 > MAX_INDEX ) {
-                    sprintf(message, "Crystal Index #2 is out of bounds. Should be less than %d, but is %d\n", MAX_INDEX, crystalindex2);
-                    terminate_with_error(message);
-                }
-                
-                rawimageD1[crystalindex1]++;
-                rawimageD2[crystalindex2]++;
-                
-                int row1 = crystalindex1 / DETECTOR_COLS;
-                int row2 = crystalindex2 / DETECTOR_COLS;
-                row2 = (DETECTOR_ROWS - 1) - row2;
-                
-                int col1 = crystalindex1 % DETECTOR_COLS;
-                int col2 = crystalindex2 % DETECTOR_COLS;
-                
-                int midplanerow = row1 + row2;
-                int midplanecol = col1 + col2;
-                
-                int projectionindex = midplanerow * PROJECTOR_COLS + midplanecol;
-                
-                proj_image[projectionindex]++;
-                
-                //                    int energy1 = eventblock[1] & 0xFF00;
-                //                    int energy2 = eventblock[2] & 0xFF00;
-                
-            } else {
+            if ( time > acqtimeseconds ) {
                 break;
+            } else if ( time == -1 ) {
+                // skip special case for now
+                continue;
             }
+            
+            // get crystal indices
+            int crystalindex1 = eventblock[1] & 0x00FF;
+            int crystalindex2 = eventblock[2] & 0x00FF;
+            
+            if ( crystalindex1 > MAX_INDEX ) {
+                sprintf(message, "Crystal Index #1 is out of bounds. Should be less than %d, but is %d\n", MAX_INDEX, crystalindex1);
+                terminate_with_error(message);
+            }
+            
+            if ( crystalindex2 > MAX_INDEX ) {
+                sprintf(message, "Crystal Index #2 is out of bounds. Should be less than %d, but is %d\n", MAX_INDEX, crystalindex2);
+                terminate_with_error(message);
+            }
+            
+            //                    int energy1 = eventblock[1] & 0xFF00;
+            //                    int energy2 = eventblock[2] & 0xFF00;
+            
+            rawimageD1[crystalindex1]++;
+            rawimageD2[crystalindex2]++;
+            
+            int row1 = crystalindex1 / DETECTOR_COLS;
+            int row2 = crystalindex2 / DETECTOR_COLS;
+            //row2 = (DETECTOR_ROWS - 1) - row2;
+            
+            int col1 = crystalindex1 % DETECTOR_COLS;
+            int col2 = crystalindex2 % DETECTOR_COLS;
+            
+            int midplanerow = row1 + row2;
+            int midplanecol = col1 + col2;
+            
+            int projectionindex = midplanerow * PROJECTOR_COLS + midplanecol;
+            
+            proj_image[projectionindex]++;
+            
+            loopcount++;
         }
+        
+        printf("loop count: %d\n", loopcount);
         fclose( fp );
     } else {
         char message[255];
         sprintf(message,"Error opening listfile %s\n", filename);
         terminate_with_error(message);
     }
+    
+
     
     printf("Processed image.\n");
     
