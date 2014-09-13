@@ -77,8 +77,8 @@ int main(int argc, const char * argv[])
             }
             
             // get crystal indices
-            int crystalindex1 = eventblock[1] & 0x00FF;
-            int crystalindex2 = eventblock[2] & 0x00FF;
+            int crystalindex1 = eventblock[1] >> 16;
+            int crystalindex2 = eventblock[2] >> 16;
             
             if ( crystalindex1 > MAX_INDEX ) {
                 sprintf(message, "Crystal Index #1 is out of bounds. Should be less than %d, but is %d\n", MAX_INDEX, crystalindex1);
