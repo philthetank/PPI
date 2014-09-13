@@ -12,10 +12,17 @@
 #include <string.h>
 
 //************************************** CONSTANTS **************************
-#define DETECTOR_ROWS 26
-#define DETECTOR_COLS 59
+#define DETECTOR_ROWS (26)
+#define DETECTOR_COLS (59)
 
-#define ERROR_FILE "PPI_error_message.txt"
+#define PROJECTOR_ROWS ((2 * DETECTOR_ROWS) - 1)
+#define PROJECTOR_COLS ((2 * DETECTOR_COLS) - 1)
+
+#define EVENTBLOCK_SIZE (3 * sizeof(int))
+
+#define MAX_INDEX ((DETECTOR_ROWS * DETECTOR_COLS) - 1)
+
+#define ERROR_FILE_NAME "PPI_error_message.txt"
 
 //************************************** PROTOTYPES **************************
 void    parse_command_line(int argc, const char *argv[], char listfile[], char basename[]);
@@ -30,23 +37,83 @@ int		keVmin = 400;
 int		keVmax = 650;
 double  acqtime= 1200.0; // acquisition time in minutes
 
-
 //************************************** MAIN **************************
 int main(int argc, const char * argv[])
 {
-    char 	listfile[255], filename[255], basename[255];
-    unsigned short rawimageD1[DETECTOR_ROWS*DETECTOR_COLS];
-    unsigned short rawimageD2[DETECTOR_ROWS*DETECTOR_COLS];
+    char listfile[255], filename[255], basename[255];
+    unsigned short rawimageD1[DETECTOR_ROWS * DETECTOR_COLS];
+    unsigned short rawimageD2[DETECTOR_ROWS * DETECTOR_COLS];
+    unsigned short proj_image[PROJECTOR_ROWS * PROJECTOR_COLS];
     
     // get input data file name
     parse_command_line( argc, argv, listfile, basename);
-    printf("command line parsed.\n");
+    printf("Command line parsed.\n");
+    
+    // open file
+    FILE *fp = fopen( listfile, "rb");
+    if (fp) {
+        int eventblock[EVENTBLOCK_SIZE];
+        const int acqtimeMinutes = acqtime * 60;
+        char message[255];
+        while ( fread(&eventblock, EVENTBLOCK_SIZE, 1, fp) >= 3 ) {
+            int time = eventblock[0];
+            if ( time <= acqtimeMinutes ) {
+                int crystalindex1 = eventblock[1] & 0x00FF;
+                int crystalindex2 = eventblock[2] & 0x00FF;
+                
+                if ( crystalindex1 > MAX_INDEX ) {
+                    sprintf(message, "Crystal Index #1 is out of bounds. Should be less than %d, but is %d\n", MAX_INDEX, crystalindex1);
+                    terminate_with_error(message);
+                }
+                
+                if ( crystalindex2 > MAX_INDEX ) {
+                    sprintf(message, "Crystal Index #2 is out of bounds. Should be less than %d, but is %d\n", MAX_INDEX, crystalindex2);
+                    terminate_with_error(message);
+                }
+                
+                rawimageD1[crystalindex1]++;
+                rawimageD2[crystalindex2]++;
+                
+                int row1 = crystalindex1 / DETECTOR_COLS;
+                int row2 = crystalindex2 / DETECTOR_COLS;
+                row2 = (DETECTOR_ROWS - 1) - row2;
+                
+                int col1 = crystalindex1 % DETECTOR_COLS;
+                int col2 = crystalindex2 % DETECTOR_COLS;
+                
+                int midplanerow = row1 + row2;
+                int midplanecol = col1 + col2;
+                
+                int projectionindex = midplanerow * PROJECTOR_COLS + midplanecol;
+                
+                proj_image[projectionindex]++;
+                
+                //                    int energy1 = eventblock[1] & 0xFF00;
+                //                    int energy2 = eventblock[2] & 0xFF00;
+                
+            } else {
+                break;
+            }
+        }
+        fclose( fp );
+    } else {
+        char message[255];
+        sprintf(message,"Error opening listfile %s\n", filename);
+        terminate_with_error(message);
+    }
+    
+    printf("Processed image.\n");
     
     sprintf(filename,"%s_Det1_raw.img", basename);
     write_i2_array( &rawimageD1[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
     sprintf(filename,"%s_Det2_raw.img", basename);
     write_i2_array( &rawimageD2[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
+    sprintf(filename,"%s_projection.img", basename);
+    write_i2_array( &proj_image[0], PROJECTOR_ROWS*PROJECTOR_COLS, filename);
     
+    printf("Wrote image to disk.\n");
+
+    printf("Finished with PPI.\n");
     return 0;
 }
 
@@ -114,7 +181,7 @@ void terminate_with_error(char message[])
     puts(" ");
     puts(message);
     
-    FILE *fp = fopen(ERROR_FILE,"w");
+    FILE *fp = fopen(ERROR_FILE_NAME,"w");
     fprintf(fp, "%s\n",message);
     fclose(fp);
     exit(-1);
