@@ -22,12 +22,20 @@
 
 #define MAX_INDEX ((DETECTOR_ROWS * DETECTOR_COLS) - 1)
 
+#define INDEX_MASK  0x0000FFFF
+#define ENERGY_MASK 0xFFFF0000
+
 #define ERROR_FILE_NAME "PPI_error_message.txt"
 
 //************************************** PROTOTYPES **************************
-void    parse_command_line(int argc, const char *argv[], char listfile[], char basename[]);
-void    terminate_with_error( char message[]);
-void    write_i2_array( unsigned short array[], int nelements, char filename[]);
+void    parse_command_line( int argc, const char *argv[], char listfile[], char basename[] );
+void    parse_from_stdin( char listfile[], char basename[] );
+void    terminate_with_error( char message[] );
+void    write_i2_array( unsigned short array[], int nelements, char filename[] );
+void    write_i4_array( unsigned int array[], int nelements, char filename[] );
+void    process_projection_image( char[], unsigned short[], unsigned short[], unsigned int[] );
+int get_crystalindex( int );
+int calculate_projection_midplane_index( int, int );
 
 //************************************** GLOBALS **************************
 double  D = 228.0;      // distance between surfaces of LYSO arrays
@@ -37,92 +45,26 @@ int		keVmax = 650;
 double  acqtime= 1200.0; // acquisition time in minutes
 
 //************************************** MAIN **************************
-int main(int argc, const char * argv[])
+int main( int argc, const char * argv[] )
 {
     char listfile[255], filename[255], basename[255];
     
-    unsigned short rawimageD1[DETECTOR_ROWS * DETECTOR_COLS];
-    unsigned short rawimageD2[DETECTOR_ROWS * DETECTOR_COLS];
-    unsigned short proj_image[PROJECTOR_ROWS * PROJECTOR_COLS];
-    
-    for ( int i = 0; i < DETECTOR_ROWS * DETECTOR_COLS; i++ ) {
-        rawimageD1[i] = 0;
-        rawimageD2[i] = 0;
-    }
-
-    for ( int i = 0; i < PROJECTOR_ROWS * PROJECTOR_COLS; i++ ) {
-        proj_image[i] = 0;
-    }
+    unsigned short rawimageD1[DETECTOR_ROWS * DETECTOR_COLS] = {0};
+    unsigned short rawimageD2[DETECTOR_ROWS * DETECTOR_COLS] = {0};
+    unsigned int proj_image[PROJECTOR_ROWS * PROJECTOR_COLS] = {0};
     
     // get input data file name
-    parse_command_line( argc, argv, listfile, basename);
-    printf("Command line parsed.\n");
-    
-    // open file
-    FILE *fp = fopen( listfile, "rb");
-    if ( fp ) {
-        int eventblock[EVENTBLOCK_SIZE];
-        const double acqtimeseconds = acqtime * 60;
-        char message[255];
-        int loopcount = 0;
-        
-        while ( fread(&eventblock, sizeof(int), 3, fp) == 3 ) {
-            // get time, check if valid
-            int time = eventblock[0];
-            if ( time > acqtimeseconds ) {
-                break;
-            } else if ( time == -1 ) {
-                // skip special case for now
-                continue;
-            }
-            
-            // get crystal indices
-            int crystalindex1 = eventblock[1] >> 16;
-            int crystalindex2 = eventblock[2] >> 16;
-            
-            if ( crystalindex1 > MAX_INDEX ) {
-                sprintf(message, "Crystal Index #1 is out of bounds. Should be less than %d, but is %d\n", MAX_INDEX, crystalindex1);
-                terminate_with_error(message);
-            }
-            
-            if ( crystalindex2 > MAX_INDEX ) {
-                sprintf(message, "Crystal Index #2 is out of bounds. Should be less than %d, but is %d\n", MAX_INDEX, crystalindex2);
-                terminate_with_error(message);
-            }
-            
-            //                    int energy1 = eventblock[1] & 0xFF00;
-            //                    int energy2 = eventblock[2] & 0xFF00;
-            
-            rawimageD1[crystalindex1]++;
-            rawimageD2[crystalindex2]++;
-            
-            int row1 = crystalindex1 / DETECTOR_COLS;
-            int row2 = crystalindex2 / DETECTOR_COLS;
-            //row2 = (DETECTOR_ROWS - 1) - row2;
-            
-            int col1 = crystalindex1 % DETECTOR_COLS;
-            int col2 = crystalindex2 % DETECTOR_COLS;
-            
-            int midplanerow = row1 + row2;
-            int midplanecol = col1 + col2;
-            
-            int projectionindex = midplanerow * PROJECTOR_COLS + midplanecol;
-            
-            proj_image[projectionindex]++;
-            
-            loopcount++;
-        }
-        
-        printf("loop count: %d\n", loopcount);
-        fclose( fp );
+    if ( argc > 1) {
+        // use command line arguments
+        parse_command_line( argc, argv, listfile, basename);
+        printf("Command line parsed.\n");
     } else {
-        char message[255];
-        sprintf(message,"Error opening listfile %s\n", filename);
-        terminate_with_error(message);
+        // parse arguments from stdin // currently only gets file path
+        parse_from_stdin( listfile, basename );
+        printf("File path parsed.\n");
     }
     
-
-    
+    process_projection_image( listfile, rawimageD1, rawimageD2, proj_image );
     printf("Processed image.\n");
     
     sprintf(filename,"%s_Det1_raw.img", basename);
@@ -130,12 +72,84 @@ int main(int argc, const char * argv[])
     sprintf(filename,"%s_Det2_raw.img", basename);
     write_i2_array( &rawimageD2[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
     sprintf(filename,"%s_projection.img", basename);
-    write_i2_array( &proj_image[0], PROJECTOR_ROWS*PROJECTOR_COLS, filename);
+    write_i4_array( &proj_image[0], PROJECTOR_ROWS*PROJECTOR_COLS, filename);
     
     printf("Wrote image to disk.\n");
 
     printf("Finished with PPI.\n");
     return 0;
+}
+
+//************************************** process_projection_image **************************
+void process_projection_image(char listfile[],
+                              unsigned short rawimageD1[], unsigned short rawimageD2[],
+                              unsigned int proj_image[] )
+{
+    // open file
+    FILE *fp = fopen( listfile, "rb" );
+    if ( !fp ) {
+        char message[255];
+        sprintf( message, "Error opening listfile %s\n", listfile );
+        terminate_with_error(message);
+    }
+    
+    int eventblock[EVENTBLOCK_SIZE];
+    const int acqtimemilliseconds = acqtime * 60000;
+    
+    while ( fread(&eventblock, sizeof(int), 3, fp) == 3 ) {
+        // get time, check if valid
+        int time = eventblock[0];
+        if ( time > acqtimemilliseconds ) {
+            break;
+        } else if ( time == -1 ) {
+            // skip special case for now
+            continue;
+        }
+        
+        int crystalindex1 = get_crystalindex( eventblock[1] );
+        int crystalindex2 = get_crystalindex( eventblock[2] );
+        
+        // int energy1 = eventblock[1] & 0xFF00;
+        // int energy2 = eventblock[2] & 0xFF00;
+        
+        rawimageD1[crystalindex1]++;
+        rawimageD2[crystalindex2]++;
+        
+        int projectionindex = calculate_projection_midplane_index( crystalindex1, crystalindex2 );
+        proj_image[projectionindex]++;
+    }
+    
+    fclose( fp );
+}
+
+//************************************** calculate_projection_midplane_index **************************
+int calculate_projection_midplane_index( int crystalindex1, int crystalindex2 )
+{
+    int row1 = crystalindex1 / DETECTOR_COLS;
+    int row2 = crystalindex2 / DETECTOR_COLS;
+    
+    int col1 = crystalindex1 % DETECTOR_COLS;
+    int col2 = crystalindex2 % DETECTOR_COLS;
+    col2 = (DETECTOR_COLS - 1) - col2;
+    
+    int midplanerow = row1 + row2;
+    int midplanecol = col1 + col2;
+    
+    int projectionindex = midplanerow * PROJECTOR_COLS + midplanecol;
+    
+    return projectionindex;
+}
+
+//************************************** get_crystalindex **************************
+int get_crystalindex( int eventblock )
+{
+    int crystalindex = eventblock & INDEX_MASK;
+    if ( crystalindex > MAX_INDEX ) {
+        char message[255];
+        sprintf(message, "Crystal Index is out of bounds. Should be less than %d, but is %d\n", MAX_INDEX, crystalindex);
+        terminate_with_error(message);
+    }
+    return crystalindex;
 }
 
 //************************************** parse_command_line **************************
@@ -196,6 +210,25 @@ void parse_command_line(int argc, const char *argv[], char listfile[], char base
     }
 }
 
+//************************************** parse_from_stdin **************************
+void parse_from_stdin( char listfile[], char basename[] )
+{
+    // get arguments interactively
+    char buf[255];
+    printf( "Enter listfile path:\n" );
+    fgets( buf, 255, stdin );
+    
+    if ( sscanf( &buf[0], "%[^\t\n]", &listfile[0]) > 0 ) {
+        strcpy( basename, listfile );
+        strtok( basename,"." );
+        
+        puts( basename );
+        puts( listfile );
+    } else {
+        terminate_with_error( "unable to get listfile path at runtime.\n" );
+    }
+}
+
 //************************************** terminate with error **************************
 void terminate_with_error(char message[])
 {
@@ -212,19 +245,40 @@ void terminate_with_error(char message[])
 void write_i2_array(unsigned short array[], int nelements, char filename[])
 {
     FILE *fp = fopen( filename,"wb");
-    char message[255];
-    
-    if (fp) {
-        size_t n = fwrite( &array[0], 2, nelements, fp);
-        if(n != nelements)  {
-            sprintf(message,"Write error! Only %zd words written instead of %d, file = %s\n", n, nelements, filename);
-            terminate_with_error(message);
-        }
-        printf ("File  %s  was written to disk.\n", filename);
-    } else {
+    if ( !fp ) {
+        char message[255];
+        sprintf(message,"Error opening file %s\n", filename);
+        terminate_with_error(message);
+    }
+
+    size_t n = fwrite( &array[0], 2, nelements, fp);
+    if( n != nelements )  {
+        char message[255];
+        sprintf(message,"Write error! Only %zd words written instead of %d, file = %s\n", n, nelements, filename);
+        terminate_with_error(message);
+    }
+
+    printf ("File %s was written to disk.\n", filename);
+    fclose(fp);
+}
+
+//************************************** write_i4_array ********************
+void write_i4_array(unsigned int array[], int nelements, char filename[])
+{
+    FILE *fp = fopen( filename,"wb");
+    if ( !fp ) {
+        char message[255];
         sprintf(message,"Error opening file %s\n", filename);
         terminate_with_error(message);
     }
     
+    size_t n = fwrite( &array[0], 4, nelements, fp);
+    if( n != nelements )  {
+        char message[255];
+        sprintf(message,"Write error! Only %zd words written instead of %d, file = %s\n", n, nelements, filename);
+        terminate_with_error(message);
+    }
+    
+    printf ("File %s was written to disk.\n", filename);
     fclose(fp);
 }
