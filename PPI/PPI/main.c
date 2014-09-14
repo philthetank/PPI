@@ -30,6 +30,13 @@
 
 #define ERROR_FILE_NAME "PPI_error_message.txt"
 
+#define KEV_MIN_FLAG 'a'
+#define KEV_MAX_FLAG 'b'
+#define CONE_ANGLE_FLAG 'C'
+#define DETECTOR_DISTANCE_FLAG 'D'
+#define ACQ_TIME_MINUTES_FLAG 'm'
+
+
 //************************************** PROTOTYPES **************************
 void    parse_command_line( int argc, const char *argv[], char listfile[], char basename[] );
 void    parse_from_stdin( char listfile[], char basename[] );
@@ -42,11 +49,11 @@ int     get_crystalindex( int );
 int     calculate_projection_midplane_index( int, int );
 
 //************************************** GLOBALS **************************
-double  D = 228.0;      // distance between surfaces of LYSO arrays
-double  CA = 3.5;       // cone angle in degrees;
-int		keVmin = 400;
-int		keVmax = 650;
-double  acqtime= 1200.0; // acquisition time in minutes
+double  detector_distance = 228.0;      // distance between surfaces of LYSO arrays
+double  cone_angle = 3.5;       // cone angle in degrees;
+int		keV_min = 400;
+int		keV_max = 650;
+double  acq_time_minutes = 1200.0; // acquisition time in minutes
 
 //************************************** MAIN **************************
 int main( int argc, const char * argv[] )
@@ -98,7 +105,7 @@ void process_projection_image(char listfile[],
         terminate_with_error(message);
     }
     
-    const int acqtimemilliseconds = acqtime * 60000;
+    const int acqtimemilliseconds = acq_time_minutes * 60000;
     int time, crystalindex1, crystalindex2, projectionindex, eventblock[EVENTBLOCK_SIZE];
     
     while ( fread(&eventblock, sizeof(int), EVENT_ELEMENT_COUNT, fp) == EVENT_ELEMENT_COUNT ) {
@@ -186,25 +193,25 @@ void parse_command_line(int argc, const char *argv[], char listfile[], char base
     for (int i=2; i<argc; i++) {
         if (argv[i][0] == '-') {
             switch(argv[i][1]) {
-                case 'a':								// lower threshold (must be above a, in keV)
-                    keVmin = atoi(&argv[i][2]);
-                    printf("lower threshold (keV) = %3d\n", keVmin);
+                case KEV_MIN_FLAG:								// lower threshold (must be above a, in keV)
+                    keV_min = atoi(&argv[i][2]);
+                    printf("lower threshold (keV) = %3d\n", keV_min);
                     break;
-                case 'b':                               // upper threshold (must be below b, in keV)
-                    keVmax = atoi(&argv[i][2]);
-                    printf("upper threshold (keV) = %3d\n", keVmax);
+                case KEV_MAX_FLAG:                               // upper threshold (must be below b, in keV)
+                    keV_max = atoi(&argv[i][2]);
+                    printf("upper threshold (keV) = %3d\n", keV_max);
                     break;
-                case 'C':                               // cone angle (in degrees)
-                    sscanf(&argv[i][2],"%lf", &CA);
-                    printf("cone angle =%6.2lf degrees\n", CA);
+                case CONE_ANGLE_FLAG:                               // cone angle (in degrees)
+                    sscanf(&argv[i][2],"%lf", &cone_angle);
+                    printf("cone angle =%6.2lf degrees\n", cone_angle);
                     break;
-                case 'D':                               // distance (in millimeters)
-                    sscanf(&argv[i][2],"%lf", &D);
-                    printf("distance between crystal surfaces =%8.2lf mm\n", D);
+                case DETECTOR_DISTANCE_FLAG:                               // distance (in millimeters)
+                    sscanf(&argv[i][2],"%lf", &detector_distance);
+                    printf("distance between crystal surfaces =%8.2lf mm\n", detector_distance);
                     break;
-                case 'm':                               // acquisition time in minutes
-                    sscanf(&argv[i][2],"%lf", &acqtime);
-                    printf("acquisition time = %6.1lf minutes\n", acqtime);
+                case ACQ_TIME_MINUTES_FLAG:                               // acquisition time in minutes
+                    sscanf(&argv[i][2],"%lf", &acq_time_minutes);
+                    printf("acquisition time = %6.1lf minutes\n", acq_time_minutes);
                     break;
                 default:
                 {
