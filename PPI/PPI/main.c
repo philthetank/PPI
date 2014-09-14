@@ -33,7 +33,7 @@ void    parse_from_stdin( char listfile[], char basename[] );
 void    terminate_with_error( char message[] );
 void    write_i2_array( unsigned short array[], int nelements, char filename[] );
 void    write_i4_array( unsigned int array[], int nelements, char filename[] );
-void    process_projection_image( char[], unsigned short[], unsigned short[], unsigned int[] );
+void    process_projection_image( char[], unsigned int[], unsigned int[], unsigned int[] );
 int get_crystalindex( int );
 int calculate_projection_midplane_index( int, int );
 
@@ -49,8 +49,8 @@ int main( int argc, const char * argv[] )
 {
     char listfile[255], filename[255], basename[255];
     
-    unsigned short rawimageD1[DETECTOR_ROWS * DETECTOR_COLS] = {0};
-    unsigned short rawimageD2[DETECTOR_ROWS * DETECTOR_COLS] = {0};
+    unsigned int rawimageD1[DETECTOR_ROWS * DETECTOR_COLS] = {0};
+    unsigned int rawimageD2[DETECTOR_ROWS * DETECTOR_COLS] = {0};
     unsigned int proj_image[PROJECTOR_ROWS * PROJECTOR_COLS] = {0};
     
     // get input data file name
@@ -68,21 +68,21 @@ int main( int argc, const char * argv[] )
     printf("Processed image.\n");
     
     sprintf(filename,"%s_Det1_raw.img", basename);
-    write_i2_array( &rawimageD1[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
+    write_i4_array( &rawimageD1[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
     sprintf(filename,"%s_Det2_raw.img", basename);
-    write_i2_array( &rawimageD2[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
+    write_i4_array( &rawimageD2[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
     sprintf(filename,"%s_projection.img", basename);
     write_i4_array( &proj_image[0], PROJECTOR_ROWS*PROJECTOR_COLS, filename);
     
     printf("Wrote image to disk.\n");
-
+    
     printf("Finished with PPI.\n");
     return 0;
 }
 
 //************************************** process_projection_image **************************
 void process_projection_image(char listfile[],
-                              unsigned short rawimageD1[], unsigned short rawimageD2[],
+                              unsigned int rawimageD1[], unsigned int rawimageD2[],
                               unsigned int proj_image[] )
 {
     // open file
@@ -93,29 +93,25 @@ void process_projection_image(char listfile[],
         terminate_with_error(message);
     }
     
-    int eventblock[EVENTBLOCK_SIZE];
     const int acqtimemilliseconds = acqtime * 60000;
+    int time, crystalindex1, crystalindex2, projectionindex, eventblock[EVENTBLOCK_SIZE];;
     
     while ( fread(&eventblock, sizeof(int), 3, fp) == 3 ) {
-        // get time, check if valid
-        int time = eventblock[0];
+        // get time, check if valid, skip special case
+        time = eventblock[0];
         if ( time > acqtimemilliseconds ) {
             break;
         } else if ( time == -1 ) {
-            // skip special case for now
             continue;
         }
         
-        int crystalindex1 = get_crystalindex( eventblock[1] );
-        int crystalindex2 = get_crystalindex( eventblock[2] );
-        
-        // int energy1 = eventblock[1] & 0xFF00;
-        // int energy2 = eventblock[2] & 0xFF00;
+        crystalindex1 = get_crystalindex( eventblock[1] );
+        crystalindex2 = get_crystalindex( eventblock[2] );
         
         rawimageD1[crystalindex1]++;
         rawimageD2[crystalindex2]++;
         
-        int projectionindex = calculate_projection_midplane_index( crystalindex1, crystalindex2 );
+        projectionindex = calculate_projection_midplane_index( crystalindex1, crystalindex2 );
         proj_image[projectionindex]++;
     }
     
@@ -159,54 +155,54 @@ void parse_command_line(int argc, const char *argv[], char listfile[], char base
     //    by the other parameters
     // e.g.  ./listproc LYSOtest.bin -a400 -b650
     
-    if(argc > 1) {
-        int nrd = sscanf( &argv[1][0], "%[^\t\n]", &listfile[0]);
-        
-        if(nrd > 0) {
-            printf("Filename = %s\n", listfile);
-            
-            // basename = list file name without extension
-            strcpy(basename, listfile);
-            strtok(basename,".");
-            
-            puts(basename);
-            puts(listfile);
-            
-            char message[255];
-            for (int i=2; i<argc; i++) {
-                if (argv[i][0] == '-') {
-                    switch(argv[i][1]) {
-                        case 'a':								// lower threshold (must be above a, in keV)
-                            keVmin = atoi(&argv[i][2]);
-                            printf("lower threshold (keV) = %3d\n", keVmin);
-                            break;
-                        case 'b':                               // upper threshold (must be below b, in keV)
-                            keVmax = atoi(&argv[i][2]);
-                            printf("upper threshold (keV) = %3d\n", keVmax);
-                            break;
-                        case 'C':                               // cone angle (in degrees)
-                            sscanf(&argv[i][2],"%lf", &CA);
-                            printf("cone angle =%6.2lf degrees\n", CA);
-                            break;
-                        case 'D':                               // distance (in millimeters)
-                            sscanf(&argv[i][2],"%lf", &D);
-                            printf("distance between crystal surfaces =%8.2lf mm\n", D);
-                            break;
-                        case 'm':                               // acquisition time in minutes
-                            sscanf(&argv[i][2],"%lf", &acqtime);
-                            printf("acquisition time = %6.1lf minutes\n", acqtime);
-                            break;
-                        default:
-                            sprintf(message, "parse_command_line found unknown argument(s)!  arg =%c\n", argv[i][1]);
-                            terminate_with_error(message);
-                    }
+    if(argc <= 1) {
+        terminate_with_error("Not enough arguments to find filename!");
+    }
+    
+    if( sscanf( &argv[1][0], "%[^\t\n]", &listfile[0]) <= 0 ) {
+        terminate_with_error("No luck parsing command line for filename!");
+    }
+    
+    printf("Filename = %s\n", listfile);
+    
+    // basename = list file name without extension
+    strcpy(basename, listfile);
+    strtok(basename,".");
+    
+    puts(basename);
+    puts(listfile);
+    
+    for (int i=2; i<argc; i++) {
+        if (argv[i][0] == '-') {
+            switch(argv[i][1]) {
+                case 'a':								// lower threshold (must be above a, in keV)
+                    keVmin = atoi(&argv[i][2]);
+                    printf("lower threshold (keV) = %3d\n", keVmin);
+                    break;
+                case 'b':                               // upper threshold (must be below b, in keV)
+                    keVmax = atoi(&argv[i][2]);
+                    printf("upper threshold (keV) = %3d\n", keVmax);
+                    break;
+                case 'C':                               // cone angle (in degrees)
+                    sscanf(&argv[i][2],"%lf", &CA);
+                    printf("cone angle =%6.2lf degrees\n", CA);
+                    break;
+                case 'D':                               // distance (in millimeters)
+                    sscanf(&argv[i][2],"%lf", &D);
+                    printf("distance between crystal surfaces =%8.2lf mm\n", D);
+                    break;
+                case 'm':                               // acquisition time in minutes
+                    sscanf(&argv[i][2],"%lf", &acqtime);
+                    printf("acquisition time = %6.1lf minutes\n", acqtime);
+                    break;
+                default:
+                {
+                    char message[255];
+                    sprintf(message, "parse_command_line found unknown argument(s)!  arg =%c\n", argv[i][1]);
+                    terminate_with_error(message);
                 }
             }
-        } else {
-            terminate_with_error("No luck parsing command line for filename!");
         }
-    } else {
-        terminate_with_error("Not enough arguments to find filename!");
     }
 }
 
@@ -232,7 +228,7 @@ void parse_from_stdin( char listfile[], char basename[] )
 //************************************** terminate with error **************************
 void terminate_with_error(char message[])
 {
-    puts(" ");
+    puts("Terminating with error: ");
     puts(message);
     
     FILE *fp = fopen(ERROR_FILE_NAME,"w");
@@ -250,14 +246,14 @@ void write_i2_array(unsigned short array[], int nelements, char filename[])
         sprintf(message,"Error opening file %s\n", filename);
         terminate_with_error(message);
     }
-
+    
     size_t n = fwrite( &array[0], 2, nelements, fp);
     if( n != nelements )  {
         char message[255];
         sprintf(message,"Write error! Only %zd words written instead of %d, file = %s\n", n, nelements, filename);
         terminate_with_error(message);
     }
-
+    
     printf ("File %s was written to disk.\n", filename);
     fclose(fp);
 }
