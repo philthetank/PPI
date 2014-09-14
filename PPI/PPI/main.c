@@ -20,7 +20,8 @@
 
 #define EVENTBLOCK_SIZE (3 * sizeof(int))
 
-#define MAX_INDEX ((DETECTOR_ROWS * DETECTOR_COLS) - 1)
+#define DETECTOR_MAX_INDEX ((DETECTOR_ROWS * DETECTOR_COLS) - 1)
+#define PROJECTOR_MAX_INDEX ((PROJECTOR_ROWS * PROJECTOR_COLS) - 1)
 
 #define INDEX_MASK  0x0000FFFF
 #define ENERGY_MASK 0xFFFF0000
@@ -35,6 +36,7 @@ void    parse_from_stdin( char listfile[], char basename[] );
 void    terminate_with_error( char message[] );
 void    write_i2_array( unsigned short array[], int nelements, char filename[] );
 void    write_i4_array( unsigned int array[], int nelements, char filename[] );
+void    write_array( const void *[], int, int, char[] );
 void    process_projection_image( char[], unsigned int[], unsigned int[], unsigned int[] );
 int     get_crystalindex( int );
 int     calculate_projection_midplane_index( int, int );
@@ -50,7 +52,7 @@ double  acqtime= 1200.0; // acquisition time in minutes
 int main( int argc, const char * argv[] )
 {
     char listfile[255], filename[255], basename[255];
-
+    
     unsigned int rawimageD1[DETECTOR_ROWS * DETECTOR_COLS] = {0};
     unsigned int rawimageD2[DETECTOR_ROWS * DETECTOR_COLS] = {0};
     unsigned int proj_image[PROJECTOR_ROWS * PROJECTOR_COLS] = {0};
@@ -71,10 +73,12 @@ int main( int argc, const char * argv[] )
     
     sprintf(filename,"%s_Det1_raw.img", basename);
     write_i4_array( &rawimageD1[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
+
     sprintf(filename,"%s_Det2_raw.img", basename);
     write_i4_array( &rawimageD2[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
     sprintf(filename,"%s_projection.img", basename);
-    write_i4_array( &proj_image[0], PROJECTOR_ROWS*PROJECTOR_COLS, filename);
+    // write_i4_array( &proj_image[0], PROJECTOR_ROWS*PROJECTOR_COLS, filename);
+    write_array( (const void **) &proj_image[0], 4, PROJECTOR_ROWS*PROJECTOR_COLS, filename );
     printf("Wrote images to disk.\n");
     
     printf("Finished with PPI.\n");
@@ -134,9 +138,9 @@ int calculate_projection_midplane_index( int crystalindex1, int crystalindex2 )
     
     int projectionindex = (midplanerow * PROJECTOR_COLS) + midplanecol;
     
-    if ( projectionindex > MAX_INDEX ) {
+    if ( projectionindex > PROJECTOR_MAX_INDEX ) {
         char message[255];
-        sprintf(message, "Projection Index is out of bounds. Should be less than %d, but is %d\n", MAX_INDEX, projectionindex);
+        sprintf(message, "Projection Index is out of bounds. Should be less than %d, but is %d\n", PROJECTOR_MAX_INDEX, projectionindex);
         terminate_with_error(message);
     }
     
@@ -147,9 +151,9 @@ int calculate_projection_midplane_index( int crystalindex1, int crystalindex2 )
 int get_crystalindex( int eventblock )
 {
     int crystalindex = eventblock & INDEX_MASK;
-    if ( crystalindex > MAX_INDEX ) {
+    if ( crystalindex > DETECTOR_MAX_INDEX ) {
         char message[255];
-        sprintf(message, "Crystal Index is out of bounds. Should be less than %d, but is %d\n", MAX_INDEX, crystalindex);
+        sprintf(message, "Crystal Index is out of bounds. Should be less than %d, but is %d\n", DETECTOR_MAX_INDEX, crystalindex);
         terminate_with_error(message);
     }
     return crystalindex;
@@ -284,4 +288,25 @@ void write_i4_array(unsigned int array[], int nelements, char filename[])
     
     printf ("File %s was written to disk.\n", filename);
     fclose(fp);
+}
+
+void write_array( const void *array[], int size, int count, char filename[] )
+{
+    FILE *fp = fopen( filename,"wb");
+    if ( !fp ) {
+        char message[255];
+        sprintf(message,"Error opening file %s\n", filename);
+        terminate_with_error(message);
+    }
+    
+    size_t n = fwrite( &array[0], size, count, fp);
+    if( n != count ) {
+        char message[255];
+        sprintf(message,"Write error! Only %zd words written instead of %d, file = %s\n", n, count, filename);
+        terminate_with_error(message);
+    }
+    
+    printf ("File %s was written to disk.\n", filename);
+    fclose(fp);
+    
 }
