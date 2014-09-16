@@ -12,7 +12,6 @@
 #include <string.h>
 
 //************************************** CONSTANTS **************************
-
 #define DETECTOR_ROWS (26)
 #define DETECTOR_COLS (59)
 
@@ -35,7 +34,6 @@
 #define CONE_ANGLE_FLAG 'C'
 #define DETECTOR_DISTANCE_FLAG 'D'
 #define ACQ_TIME_MINUTES_FLAG 'm'
-
 
 //************************************** PROTOTYPES **************************
 void    parse_command_line( int argc, const char *argv[], char listfile[], char basename[] );
@@ -203,8 +201,6 @@ void parse_command_line(int argc, const char *argv[], char listfile[], char base
     }
     printf("basename = %s  extension = %s\n", basename, extension);
     
-
-    
     for (int i=2; i<argc; i++) {
         if (argv[i][0] == '-') {
             switch(argv[i][1]) {
@@ -248,11 +244,16 @@ void parse_from_stdin( char listfile[], char basename[] )
     fgets( buf, 255, stdin );
     
     if ( sscanf( &buf[0], "%[^\t\n]", &listfile[0]) > 0 ) {
-        strcpy( basename, listfile );
-        strtok( basename,"." );
-        
-        puts( basename );
-        puts( listfile );
+        // basename = list file name without extension
+        char * extension = strrchr(listfile,'.');
+        if(extension == NULL)
+            strcpy( basename, listfile);
+        else {
+            // len is the length of the basename
+            size_t len = strlen(listfile) - strlen(extension);
+            strncpy( basename, listfile, len);
+        }
+        printf("basename = %s  extension = %s\n", basename, extension);
     } else {
         terminate_with_error( "unable to get listfile path at runtime.\n" );
     }
