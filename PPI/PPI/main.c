@@ -12,6 +12,7 @@
 #include <string.h>
 
 //************************************** CONSTANTS **************************
+
 #define DETECTOR_ROWS (26)
 #define DETECTOR_COLS (59)
 
@@ -24,7 +25,6 @@
 #define PROJECTOR_MAX_INDEX ((PROJECTOR_ROWS * PROJECTOR_COLS) - 1)
 
 #define INDEX_MASK  0x0000FFFF
-#define ENERGY_MASK 0xFFFF0000
 
 #define EVENT_ELEMENT_COUNT 3
 
@@ -44,13 +44,14 @@ void    terminate_with_error( char message[] );
 void    write_i2_array( unsigned short array[], int nelements, char filename[] );
 void    write_i4_array( unsigned int array[], int nelements, char filename[] );
 void    write_array( const void *[], int, int, char[] );
-void    process_projection_image( char[], unsigned int[], unsigned int[], unsigned int[] );
+void    process_projection_image( char[], unsigned int[], unsigned int[], unsigned int[], double );
 int     get_crystalindex( int );
-int     calculate_projection_midplane_index( int, int );
+int     calculate_projection_midplane_index( int, int, double );
 
 //************************************** GLOBALS **************************
 double  detector_distance = 228.0;      // distance between surfaces of LYSO arrays
 double  cone_angle = 3.5;       // cone angle in degrees;
+double  crystal_pitch = 1.6;     // in mm, distance between crystal centers
 int		keV_min = 400;
 int		keV_max = 650;
 double  acq_time_minutes = 1200.0; // acquisition time in minutes
@@ -75,17 +76,21 @@ int main( int argc, const char * argv[] )
         printf("File path parsed.\n");
     }
     
-    process_projection_image( listfile, rawimageD1, rawimageD2, proj_image );
+    double acceptance_radius = (detector_distance/crystal_pitch)*tan(M_PI*cone_angle/180.0);
+    double acc_radius2 = acceptance_radius*acceptance_radius;
+    printf("cone_angle = %6.1lf degrees  distance = %8.1lf mm\n", cone_angle, detector_distance);
+    printf("acceptance radius = %8.2lf  crystal units\n", acceptance_radius);
+
+    process_projection_image( listfile, rawimageD1, rawimageD2, proj_image, acc_radius2 );
     printf("Processed images.\n");
+
     
     sprintf(filename,"%s_Det1_raw.img", basename);
     write_i4_array( &rawimageD1[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
-
     sprintf(filename,"%s_Det2_raw.img", basename);
     write_i4_array( &rawimageD2[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
     sprintf(filename,"%s_projection.img", basename);
-    // write_i4_array( &proj_image[0], PROJECTOR_ROWS*PROJECTOR_COLS, filename);
-    write_array( (const void **) &proj_image[0], 4, PROJECTOR_ROWS*PROJECTOR_COLS, filename );
+    write_i4_array( &proj_image[0], PROJECTOR_ROWS*PROJECTOR_COLS, filename);
     printf("Wrote images to disk.\n");
     
     printf("Finished with PPI.\n");
@@ -95,7 +100,8 @@ int main( int argc, const char * argv[] )
 //************************************** process_projection_image **************************
 void process_projection_image(char listfile[],
                               unsigned int rawimageD1[], unsigned int rawimageD2[],
-                              unsigned int proj_image[] )
+                              unsigned int proj_image[],
+                              double acceptance_radius2)
 {
     // open file
     FILE *fp = fopen( listfile, "rb" );
@@ -123,15 +129,17 @@ void process_projection_image(char listfile[],
         rawimageD1[crystalindex1]++;
         rawimageD2[crystalindex2]++;
         
-        projectionindex = calculate_projection_midplane_index( crystalindex1, crystalindex2 );
-        proj_image[projectionindex]++;
+        projectionindex = calculate_projection_midplane_index( crystalindex1, crystalindex2, acceptance_radius2 );
+        if ( projectionindex >= 0) {
+            proj_image[projectionindex]++;
+        }
     }
     
     fclose( fp );
 }
 
 //************************************** calculate_projection_midplane_index **************************
-int calculate_projection_midplane_index( int crystalindex1, int crystalindex2 )
+int calculate_projection_midplane_index( int crystalindex1, int crystalindex2, double acceptance_radius2 )
 {
     int row1 = crystalindex1 / DETECTOR_COLS;
     int row2 = crystalindex2 / DETECTOR_COLS;
@@ -143,7 +151,8 @@ int calculate_projection_midplane_index( int crystalindex1, int crystalindex2 )
     int midplanerow = row1 + row2;
     int midplanecol = col1 + col2;
     
-    int projectionindex = (midplanerow * PROJECTOR_COLS) + midplanecol;
+    int distance2 = ((row1 - row2) * (row1 - row2)) + ((col1 - col2) * (col1 - col2));
+    int projectionindex = (distance2 > acceptance_radius2) ? -1 : (midplanerow * PROJECTOR_COLS) + midplanecol;
     
     if ( projectionindex > PROJECTOR_MAX_INDEX ) {
         char message[255];
@@ -184,11 +193,17 @@ void parse_command_line(int argc, const char *argv[], char listfile[], char base
     printf("Filename = %s\n", listfile);
     
     // basename = list file name without extension
-    strcpy(basename, listfile);
-    strtok(basename,".");
+    char * extension = strrchr(listfile,'.');
+    if(extension == NULL)
+        strcpy( basename, listfile);
+    else {
+        // len is the length of the basename
+        size_t len = strlen(listfile) - strlen(extension);
+        strncpy( basename, listfile, len);
+    }
+    printf("basename = %s  extension = %s\n", basename, extension);
     
-    puts(basename);
-    puts(listfile);
+
     
     for (int i=2; i<argc; i++) {
         if (argv[i][0] == '-') {
@@ -297,6 +312,7 @@ void write_i4_array(unsigned int array[], int nelements, char filename[])
     fclose(fp);
 }
 
+//************************************** write_array ********************
 void write_array( const void *array[], int size, int count, char filename[] )
 {
     FILE *fp = fopen( filename,"wb");
@@ -315,5 +331,4 @@ void write_array( const void *array[], int size, int count, char filename[] )
     
     printf ("File %s was written to disk.\n", filename);
     fclose(fp);
-    
 }
