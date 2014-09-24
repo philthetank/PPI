@@ -86,7 +86,7 @@ int main( int argc, const char * argv[] )
     
     //    process_projection_image( listfile, rawimageD1, rawimageD2, proj_image, acc_radius2 );
     //    printf("Processed images.\n");
-
+    
     double y1 = (detector_distance * (-0.5));
     double y2 = (detector_distance * 0.5);
     double center = (DETECTOR_COLS - 1) * 0.5;
@@ -95,8 +95,9 @@ int main( int argc, const char * argv[] )
     const int angular_bins = 50;
     const int slices = 2 * DETECTOR_ROWS - 1;
     const int sino_size = radial_bins * angular_bins * slices;
+    const int segment_count = 37;
     
-    unsigned int sinogram[sino_size] = {0};
+    unsigned int sinogram[sino_size][segment_count] = {0};
     
     for (int row1 = 0; row1 < DETECTOR_ROWS; row1++) {
         for (int row2 = 0; row2 < DETECTOR_ROWS; row2++) {
@@ -111,11 +112,11 @@ int main( int argc, const char * argv[] )
                     sino_coord(x1, x2, y1, y2, &r, &phi);
                     phi += 25;
                     int radial_coord = round(r + angular_bins / 2);
-                    int argument = round(phi) * radial_bins + radial_coord;
-                    argument += radial_bins * angular_bins * slice_number;
+                    int index = round(phi) * radial_bins + radial_coord;
+                    index += radial_bins * angular_bins * slice_number;
                     
-                    if ( argument < sino_size && argument >= 0){
-                        sinogram[argument]++;
+                    if (index < sino_size && index >= 0){
+                        sinogram[index][0]++;
                         printf("These seem okay: r %6.3lf and phi %6.3lf\n", r, phi);
                     } else {
                         printf("Somethings wrong with r %6.3lf and phi %6.3lf\n", r, phi);
@@ -130,12 +131,12 @@ int main( int argc, const char * argv[] )
     sprintf(filename, "%s_sinogram.img", basename);
     write_i4_array(&sinogram[0], sino_size, filename);
     
-//    sprintf(filename,"%s_Det1_raw.img", basename);
-//    write_i4_array( &rawimageD1[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
-//    sprintf(filename,"%s_Det2_raw.img", basename);
-//    write_i4_array( &rawimageD2[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
-//    sprintf(filename,"%s_projection.img", basename);
-//    write_i4_array( &proj_image[0], PROJECTOR_ROWS*PROJECTOR_COLS, filename);
+    //    sprintf(filename,"%s_Det1_raw.img", basename);
+    //    write_i4_array( &rawimageD1[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
+    //    sprintf(filename,"%s_Det2_raw.img", basename);
+    //    write_i4_array( &rawimageD2[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
+    //    sprintf(filename,"%s_projection.img", basename);
+    //    write_i4_array( &proj_image[0], PROJECTOR_ROWS*PROJECTOR_COLS, filename);
     printf("Wrote images to disk.\n");
     
     printf("Finished with PPI.\n");
