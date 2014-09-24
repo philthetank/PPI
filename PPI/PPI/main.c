@@ -55,7 +55,7 @@ int		keV_min = 400;
 int		keV_max = 650;
 double  acq_time_minutes = 1200.0; // acquisition time in minutes
 double  bin_width = 0.8; // == half of crystal pitch
-double  angular_bin_width = 2.3;
+double  angular_bin_width = 2.1;
 
 //************************************** MAIN **************************
 int main( int argc, const char * argv[] )
@@ -91,31 +91,44 @@ int main( int argc, const char * argv[] )
     double y2 = (detector_distance * 0.5);
     double center = (DETECTOR_COLS - 1) * 0.5;
     
-    unsigned int sinogram[55 * 100] = {0};
+    const int radial_bins = 51;
+    const int angular_bins = 50;
+    const int slices = 2 * DETECTOR_ROWS - 1;
+    const int sino_size = radial_bins * angular_bins * slices;
     
+    unsigned int sinogram[sino_size] = {0};
     
-    for (int col1 = 0; col1 < DETECTOR_COLS; col1++) {
-        double x1 = (col1 - center) * crystal_pitch;
-        for (int col2 = 0; col2 < DETECTOR_COLS; col2++) {
-            double r, phi;
-            double x2 = (col2 - center) * crystal_pitch;
-            
-            sino_coord(x1, x2, y1, y2, &r, &phi);
-            int radial_coord = round(r + 27.0);
-            int argument = round(phi) * 55 + radial_coord;
-            if ( argument < 55 * 100 && argument >= 0){
-                sinogram[argument]++;
-                printf("These seem okay: r %6.3lf and phi %6.3lf\n", r, phi);
-            } else {
-                printf("Somethings wrong with r %6.3lf and phi %6.3lf\n", r, phi);
+    for (int row1 = 0; row1 < DETECTOR_ROWS; row1++) {
+        for (int row2 = 0; row2 < DETECTOR_ROWS; row2++) {
+            if ( abs(row1 - row2) > 1) { continue; }
+            int slice_number = row1 + row2;
+            for (int col1 = 0; col1 < DETECTOR_COLS; col1++) {
+                double x1 = (col1 - center) * crystal_pitch;
+                for (int col2 = 0; col2 < DETECTOR_COLS; col2++) {
+                    double r, phi;
+                    double x2 = (col2 - center) * crystal_pitch;
+                    
+                    sino_coord(x1, x2, y1, y2, &r, &phi);
+                    phi += 25;
+                    int radial_coord = round(r + angular_bins / 2);
+                    int argument = round(phi) * radial_bins + radial_coord;
+                    argument += radial_bins * angular_bins * slice_number;
+                    
+                    if ( argument < sino_size && argument >= 0){
+                        sinogram[argument]++;
+                        printf("These seem okay: r %6.3lf and phi %6.3lf\n", r, phi);
+                    } else {
+                        printf("Somethings wrong with r %6.3lf and phi %6.3lf\n", r, phi);
+                    }
+                    
+                }
+                printf("Column %d done\n", col1);
             }
-            
         }
-        printf("Column %d done\n", col1);
     }
     
     sprintf(filename, "%s_sinogram.img", basename);
-    write_i4_array(&sinogram[0], 55 * 100, filename);
+    write_i4_array(&sinogram[0], sino_size, filename);
     
 //    sprintf(filename,"%s_Det1_raw.img", basename);
 //    write_i4_array( &rawimageD1[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
@@ -174,9 +187,8 @@ void process_projection_image(char listfile[],
 void sino_coord( double x1, double x2, double y1, double y2, double* r, double* phi)
 {
     *phi = atan2(x2 - x1, y2 - y1); // gets angle ( in rads )
-    *r = (y2 * sin(*phi) + x2 * cos(*phi)) / bin_width; // get distance in bin width
+    *r = (-y2 * sin(*phi) + x2 * cos(*phi)) / bin_width; // get distance in bin width
     *phi *= (180.0 / M_PI) / angular_bin_width; // converts to angular bin number
-    *phi += 50; // add 50 bin units to center in array
 }
 
 //************************************** calculate_projection_midplane_index **************************
