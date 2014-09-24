@@ -12,8 +12,8 @@
 #include <string.h>
 
 //************************************** CONSTANTS **************************
-#define DETECTOR_ROWS (26)
-#define DETECTOR_COLS (59)
+#define DETECTOR_ROWS (59)
+#define DETECTOR_COLS (26)
 
 #define PROJECTOR_ROWS ((2 * DETECTOR_ROWS) - 1)
 #define PROJECTOR_COLS ((2 * DETECTOR_COLS) - 1)
@@ -45,14 +45,17 @@ void    write_array( const void *[], int, int, char[] );
 void    process_projection_image( char[], unsigned int[], unsigned int[], unsigned int[], double );
 int     get_crystalindex( int );
 int     calculate_projection_midplane_index( int, int, double );
+void    sino_coord( double, double, double, double, double*, double*);
 
 //************************************** GLOBALS **************************
-double  detector_distance = 228.0;      // distance between surfaces of LYSO arrays
+double  detector_distance = 40;      // distance between surfaces of LYSO arrays
 double  cone_angle = 3.5;       // cone angle in degrees;
 double  crystal_pitch = 1.6;     // in mm, distance between crystal centers
 int		keV_min = 400;
 int		keV_max = 650;
 double  acq_time_minutes = 1200.0; // acquisition time in minutes
+double  bin_width = 0.8; // == half of crystal pitch
+double  angular_bin_width = 2.3;
 
 //************************************** MAIN **************************
 int main( int argc, const char * argv[] )
@@ -74,21 +77,52 @@ int main( int argc, const char * argv[] )
         printf("File path parsed.\n");
     }
     
-    double acceptance_radius = (detector_distance/crystal_pitch)*tan(M_PI*cone_angle/180.0);
-    double acc_radius2 = acceptance_radius*acceptance_radius;
-    printf("cone_angle = %6.1lf degrees  distance = %8.1lf mm\n", cone_angle, detector_distance);
-    printf("acceptance radius = %8.2lf  crystal units\n", acceptance_radius);
-
-    process_projection_image( listfile, rawimageD1, rawimageD2, proj_image, acc_radius2 );
-    printf("Processed images.\n");
-
+    /* not currently needed for sinogram. */
     
-    sprintf(filename,"%s_Det1_raw.img", basename);
-    write_i4_array( &rawimageD1[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
-    sprintf(filename,"%s_Det2_raw.img", basename);
-    write_i4_array( &rawimageD2[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
-    sprintf(filename,"%s_projection.img", basename);
-    write_i4_array( &proj_image[0], PROJECTOR_ROWS*PROJECTOR_COLS, filename);
+    //    double acceptance_radius = (detector_distance/crystal_pitch)*tan(M_PI*cone_angle/180.0);
+    //    double acc_radius2 = acceptance_radius*acceptance_radius;
+    //    printf("cone_angle = %6.1lf degrees  distance = %8.1lf mm\n", cone_angle, detector_distance);
+    //    printf("acceptance radius = %8.2lf  crystal units\n", acceptance_radius);
+    
+    //    process_projection_image( listfile, rawimageD1, rawimageD2, proj_image, acc_radius2 );
+    //    printf("Processed images.\n");
+
+    double y1 = (detector_distance * (-0.5));
+    double y2 = (detector_distance * 0.5);
+    double center = (DETECTOR_COLS - 1) * 0.5;
+    
+    unsigned int sinogram[55 * 100] = {0};
+    
+    
+    for (int col1 = 0; col1 < DETECTOR_COLS; col1++) {
+        double x1 = (col1 - center) * crystal_pitch;
+        for (int col2 = 0; col2 < DETECTOR_COLS; col2++) {
+            double r, phi;
+            double x2 = (col2 - center) * crystal_pitch;
+            
+            sino_coord(x1, x2, y1, y2, &r, &phi);
+            int radial_coord = round(r + 27.0);
+            int argument = round(phi) * 55 + radial_coord;
+            if ( argument < 55 * 100 && argument >= 0){
+                sinogram[argument]++;
+                printf("These seem okay: r %6.3lf and phi %6.3lf\n", r, phi);
+            } else {
+                printf("Somethings wrong with r %6.3lf and phi %6.3lf\n", r, phi);
+            }
+            
+        }
+        printf("Column %d done\n", col1);
+    }
+    
+    sprintf(filename, "%s_sinogram.img", basename);
+    write_i4_array(&sinogram[0], 55 * 100, filename);
+    
+//    sprintf(filename,"%s_Det1_raw.img", basename);
+//    write_i4_array( &rawimageD1[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
+//    sprintf(filename,"%s_Det2_raw.img", basename);
+//    write_i4_array( &rawimageD2[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
+//    sprintf(filename,"%s_projection.img", basename);
+//    write_i4_array( &proj_image[0], PROJECTOR_ROWS*PROJECTOR_COLS, filename);
     printf("Wrote images to disk.\n");
     
     printf("Finished with PPI.\n");
@@ -134,6 +168,15 @@ void process_projection_image(char listfile[],
     }
     
     fclose( fp );
+}
+
+
+void sino_coord( double x1, double x2, double y1, double y2, double* r, double* phi)
+{
+    *phi = atan2(x2 - x1, y2 - y1); // gets angle ( in rads )
+    *r = (y2 * sin(*phi) + x2 * cos(*phi)) / bin_width; // get distance in bin width
+    *phi *= (180.0 / M_PI) / angular_bin_width; // converts to angular bin number
+    *phi += 50; // add 50 bin units to center in array
 }
 
 //************************************** calculate_projection_midplane_index **************************
