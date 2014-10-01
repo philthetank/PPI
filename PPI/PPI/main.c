@@ -45,7 +45,7 @@ void    write_array( const void *[], int, int, char[] );
 void    process_projection_image( char[], unsigned int[], unsigned int[], unsigned int[], double );
 int     get_crystalindex( int );
 int     calculate_projection_midplane_index( int, int, double );
-void    sino_coord( double, double, double, double, double*, double*);
+void    sino_coord( double, double, double, double, double, double, double*, double*, double*, double*);
 
 //************************************** GLOBALS **************************
 double  detector_distance = 40;      // distance between surfaces of LYSO arrays
@@ -62,9 +62,9 @@ int main( int argc, const char * argv[] )
 {
     char listfile[255], filename[255], basename[255];
     
-    unsigned int rawimageD1[DETECTOR_ROWS * DETECTOR_COLS] = {0};
-    unsigned int rawimageD2[DETECTOR_ROWS * DETECTOR_COLS] = {0};
-    unsigned int proj_image[PROJECTOR_ROWS * PROJECTOR_COLS] = {0};
+    //    unsigned int rawimageD1[DETECTOR_ROWS * DETECTOR_COLS] = {0};
+    //    unsigned int rawimageD2[DETECTOR_ROWS * DETECTOR_COLS] = {0};
+    //    unsigned int proj_image[PROJECTOR_ROWS * PROJECTOR_COLS] = {0};
     
     // get input data file name
     if ( argc > 1) {
@@ -92,44 +92,69 @@ int main( int argc, const char * argv[] )
     double center = (DETECTOR_COLS - 1) * 0.5;
     
     const int radial_bins = 51;
-    const int angular_bins = 50;
+    //    const int angular_bins = 50;
+    const int azimuth_count = 17;
     const int slices = 2 * DETECTOR_ROWS - 1;
-    const int sino_size = radial_bins * angular_bins * slices;
-    const int segment_count = 37;
+    const int projection_size = radial_bins * slices;
+    const int segment_count = 39;
+    const int span = 3;
     
-    unsigned int sinogram[sino_size][segment_count] = {0};
+    const int planogram_size = projection_size * azimuth_count * segment_count;
     
+    unsigned int *planogram; //[projection_size][azimuth_count][segment_count] = {0};
+    planogram = calloc(planogram_size, sizeof(int));
+    
+    double zcenter = (DETECTOR_ROWS - 1) * 0.5;
     for (int row1 = 0; row1 < DETECTOR_ROWS; row1++) {
+        
+        double z1 = (row1 - zcenter) * crystal_pitch;
+        
         for (int row2 = 0; row2 < DETECTOR_ROWS; row2++) {
-            if ( abs(row1 - row2) > 1) { continue; }
-            int slice_number = row1 + row2;
+            
+            double z2 = (row2 - zcenter) * crystal_pitch;
+            int tilt_segment = round( (double) (row2 - row1) / (double) span );
+            if ( tilt_segment < 0 ) { tilt_segment += segment_count; }
+            if ( tilt_segment < 0 || tilt_segment >= segment_count ) {
+                printf("Tilt segment = %d\n", tilt_segment);
+                terminate_with_error("tilt segment is out of bounds");
+            }
+            
             for (int col1 = 0; col1 < DETECTOR_COLS; col1++) {
                 double x1 = (col1 - center) * crystal_pitch;
+                
                 for (int col2 = 0; col2 < DETECTOR_COLS; col2++) {
-                    double r, phi;
-                    double x2 = (col2 - center) * crystal_pitch;
                     
-                    sino_coord(x1, x2, y1, y2, &r, &phi);
-                    phi += 25;
-                    int radial_coord = round(r + angular_bins / 2);
-                    int index = round(phi) * radial_bins + radial_coord;
-                    index += radial_bins * angular_bins * slice_number;
-                    
-                    if (index < sino_size && index >= 0){
-                        sinogram[index][0]++;
-                        printf("These seem okay: r %6.3lf and phi %6.3lf\n", r, phi);
-                    } else {
-                        printf("Somethings wrong with r %6.3lf and phi %6.3lf\n", r, phi);
+                    int azimuth_segment = round( (double) (col2 - col1) / (double) span );
+                    if (azimuth_segment < 0) { azimuth_segment += azimuth_count; }
+                    if ( azimuth_segment < 0 || azimuth_segment >= azimuth_count ) {
+                        printf("azimuth segment = %d\n", azimuth_segment);
+                        terminate_with_error("azimuth segment is out of bounds");
                     }
                     
+                    double r, phi, z, theta;
+                    double x2 = (col2 - center) * crystal_pitch;
+                    
+                    sino_coord(x1, x2, y1, y2, z1, z2, &r, &phi, &theta, &z);
+                    z += (slices / 2.0);
+                    
+                    int radial_coord = round(r + (center * 2.0));
+                    int index = round(z) * radial_bins + radial_coord;
+                    index += azimuth_segment * projection_size;
+                    index += tilt_segment * azimuth_count * projection_size;
+                    
+                    if (index < planogram_size && index >= 0){
+                        planogram[index]++;
+                    } else {
+                        printf("Somethings wrong with r %6.3lf and z %6.3lf\n", r, round(z));
+                    }
+                    //printf("row1: %2d, row2: %2d, z: %6.3lf, theta: %6.3lf\n", row1, row2, z, theta * 180 / M_PI);
                 }
-                printf("Column %d done\n", col1);
             }
         }
     }
     
-    sprintf(filename, "%s_sinogram.img", basename);
-    write_i4_array(&sinogram[0], sino_size, filename);
+    sprintf(filename, "%s_projections.img", basename);
+    write_i4_array(&planogram[0], planogram_size, filename);
     
     //    sprintf(filename,"%s_Det1_raw.img", basename);
     //    write_i4_array( &rawimageD1[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
@@ -185,11 +210,20 @@ void process_projection_image(char listfile[],
 }
 
 
-void sino_coord( double x1, double x2, double y1, double y2, double* r, double* phi)
+//************************************** sino coordinates **************************
+void sino_coord( double x1, double x2, double y1, double y2, double z1, double z2, double* r, double* phi, double* theta, double *z)
 {
     *phi = atan2(x2 - x1, y2 - y1); // gets angle ( in rads )
-    *r = (-y2 * sin(*phi) + x2 * cos(*phi)) / bin_width; // get distance in bin width
+    *r = (-y2 * sin(*phi) + x2 * cos(*phi));// / bin_width; // get distance in bin width
     *phi *= (180.0 / M_PI) / angular_bin_width; // converts to angular bin number
+    
+    double temp = (y2 - y1) * (y2 - y1) + (x2 - x1) * (x2 - x1);
+    *theta = atan((z2 - z1) / sqrt(temp));
+    
+    *z =sqrt(y1 * y1 + x1 * x1 - (*r)*(*r)) * sin(*theta);
+    *z += z1 * cos(*theta);
+    *z /= bin_width;
+    *r /= bin_width;
 }
 
 //************************************** calculate_projection_midplane_index **************************
