@@ -2,8 +2,8 @@
 //  main.c
 //  PPI project  2D projection images from 2 opposed scintillator arrays
 //
-//  Created by Jurgen Seidel on 9/9/14.
-//  Copyright (c) 2014 Jurgen Seidel. All rights reserved.
+//  Created by Jurgen and Philip Seidel on 9/9/14.
+//  Copyright (c) 2014 Jurgen and Philip Seidel. All rights reserved.
 //
 
 #include <stdio.h>
@@ -34,37 +34,45 @@
 #define CONE_ANGLE_FLAG 'C'
 #define DETECTOR_DISTANCE_FLAG 'D'
 #define ACQ_TIME_MINUTES_FLAG 'm'
+#define PROCESS_2D_PROJECTION_FLAG 'P'
 
 //************************************** PROTOTYPES **************************
+void    create_measured_planogram( float *planogram, const int planogram_size, char listfile[], char basename[]);
+void    create_normplanogram( float *planogram, const int planogram_size);
 void    parse_command_line( int argc, const char *argv[], char listfile[], char basename[] );
 void    parse_from_stdin( char listfile[], char basename[] );
 void    terminate_with_error( char message[] );
 void    write_i2_array( unsigned short array[], int nelements, char filename[] );
 void    write_i4_array( unsigned int array[], int nelements, char filename[] );
+void    write_r4_array( float array[], int nelements, char filename[] );
 void    write_array( const void *[], int, int, char[] );
-void    process_projection_image( char[], unsigned int[], unsigned int[], unsigned int[], double );
+void    process_2Dprojection_image( char[], char[] );
 int     get_crystalindex( int );
 int     calculate_projection_midplane_index( int, int, double );
 void    sino_coord( double, double, double, double, double, double, double*, double*, double*, double*);
 
+
 //************************************** GLOBALS **************************
 double  detector_distance = 40;      // distance between surfaces of LYSO arrays
-double  cone_angle = 3.5;       // cone angle in degrees;
+double  cone_angle = 5.0;       // cone angle in degrees;
 double  crystal_pitch = 1.6;     // in mm, distance between crystal centers
-int		keV_min = 400;
-int		keV_max = 650;
+int		keV_min = 250;
+int		keV_max = 700;
+int     conventional_2D_projection = 0;
 double  acq_time_minutes = 1200.0; // acquisition time in minutes
 double  bin_width = 0.8; // == half of crystal pitch
 double  angular_bin_width = 2.1;
+const int radial_bins = 2 * DETECTOR_COLS - 1;
+const int axial_bins = 2 * DETECTOR_ROWS - 1;
+const int projection_size = radial_bins * axial_bins;
+const int azimuth_count = 17;
+const int segment_count = 39;
+const int span = 3;
 
 //************************************** MAIN **************************
 int main( int argc, const char * argv[] )
 {
-    char listfile[255], filename[255], basename[255];
-    
-    //    unsigned int rawimageD1[DETECTOR_ROWS * DETECTOR_COLS] = {0};
-    //    unsigned int rawimageD2[DETECTOR_ROWS * DETECTOR_COLS] = {0};
-    //    unsigned int proj_image[PROJECTOR_ROWS * PROJECTOR_COLS] = {0};
+    char listfile[255], basename[255];
     
     // get input data file name
     if ( argc > 1) {
@@ -73,44 +81,171 @@ int main( int argc, const char * argv[] )
         printf("Command line parsed.\n");
     } else {
         // parse arguments from stdin // currently only gets file path
-        parse_from_stdin( listfile, basename );
+        parse_from_stdin( listfile, basename);
         printf("File path parsed.\n");
     }
     
-    /* not currently needed for sinogram. */
-    
-    //    double acceptance_radius = (detector_distance/crystal_pitch)*tan(M_PI*cone_angle/180.0);
-    //    double acc_radius2 = acceptance_radius*acceptance_radius;
-    //    printf("cone_angle = %6.1lf degrees  distance = %8.1lf mm\n", cone_angle, detector_distance);
-    //    printf("acceptance radius = %8.2lf  crystal units\n", acceptance_radius);
-    
-    //    process_projection_image( listfile, rawimageD1, rawimageD2, proj_image, acc_radius2 );
-    //    printf("Processed images.\n");
-    
-    double y1 = (detector_distance * (-0.5));
-    double y2 = (detector_distance * 0.5);
-    double center = (DETECTOR_COLS - 1) * 0.5;
-    
-    const int radial_bins = 51;
-    //    const int angular_bins = 50;
-    const int azimuth_count = 17;
-    const int slices = 2 * DETECTOR_ROWS - 1;
-    const int projection_size = radial_bins * slices;
-    const int segment_count = 39;
-    const int span = 3;
+    if(conventional_2D_projection) {
+        process_2Dprojection_image(listfile, basename);
+        printf("Finished with conventional 2D projection image.\n");
+        return 0;
+    }
     
     const int planogram_size = projection_size * azimuth_count * segment_count;
     
-    unsigned int *planogram; //[projection_size][azimuth_count][segment_count] = {0};
-    planogram = calloc(planogram_size, sizeof(int));
+    // create a "normalization" planogram
+    float *normplanogram;
+    normplanogram = calloc(planogram_size, sizeof(float));
+    create_normplanogram( normplanogram, planogram_size);
     
+    // create the planogram from measured data in list mode file
+    float *measured_planogram;
+    measured_planogram = calloc(planogram_size, sizeof(float));
+    create_measured_planogram(measured_planogram, planogram_size, listfile, basename);
+    
+    // initialize image space
+    int xbins = radial_bins;
+    int ybins = round(detector_distance/0.8);
+    int zbins = axial_bins;
+    int image_size = xbins * ybins * zbins;
+    float *image;
+    image = calloc( image_size, sizeof(float));
+    
+    printf("Wrote images to disk.\n");
+    printf("Finished with PLATO code.\n");
+    return 0;
+}
+
+
+//************************************** create_normplanogram **************************
+void create_measured_planogram( float *planogram, const int planogram_size, char listfile[], char basename[])
+{   // we reading list mode data file on an event-by-event basis and placing events into projections
+    // NOTE: row and columns have been switched compared to previous 2D-Projection mode version
+    
+    FILE *fp = fopen( listfile, "rb" );
+    if ( !fp ) {
+        char message[255];
+        sprintf( message, "Error opening listfile %s\n", listfile );
+        terminate_with_error(message);
+    }
+    
+    const int acqtimemilliseconds = acq_time_minutes * 60000;
+    int time, crystalindex1, crystalindex2, eventblock[EVENTBLOCK_SIZE];
+    
+    unsigned int rawimageD1[DETECTOR_ROWS * DETECTOR_COLS] = {0};
+    unsigned int rawimageD2[DETECTOR_ROWS * DETECTOR_COLS] = {0};
+    
+    double y1 = (detector_distance * (-0.5));
+    double y2 = (detector_distance * 0.5);
+    double xcenter = (DETECTOR_COLS - 1) * 0.5;
     double zcenter = (DETECTOR_ROWS - 1) * 0.5;
-    for (int row1 = 0; row1 < DETECTOR_ROWS; row1++) {
+    double r, phi, z, theta;
+    double xcenterbins = xcenter * crystal_pitch /bin_width;
+    double zcenterbins = zcenter * crystal_pitch /bin_width;
+    
+    int  event_count=0;
+    int  energy1, energy2;
+    
+    while ( fread(&eventblock, sizeof(int), EVENT_ELEMENT_COUNT, fp) == EVENT_ELEMENT_COUNT ) {
+        // get time, check if valid, skip special case
+        time = eventblock[0];
+        if ( time > acqtimemilliseconds ) {
+            break;
+        } else if ( time == -1 ) {
+            continue;
+        }
         
+        // energy test first. both energies must be in window [keVmin, keVmax]
+        energy1 = eventblock[1]>>16;
+        if( energy1 < keV_min || energy1 > keV_max) continue;
+        energy2 = eventblock[2]>>16;
+        if( energy2 < keV_min || energy2 > keV_max) continue;
+        
+        crystalindex1 = get_crystalindex( eventblock[1] );
+        crystalindex2 = get_crystalindex( eventblock[2] );
+        rawimageD1[crystalindex1]++;
+        rawimageD2[crystalindex2]++;
+        
+        int col1 = crystalindex1 / DETECTOR_ROWS;
+        int col2 = crystalindex2 / DETECTOR_ROWS;
+        int row1 = crystalindex1 % DETECTOR_ROWS;
+        int row2 = crystalindex2 % DETECTOR_ROWS;
+        row2 = (DETECTOR_ROWS - 1) - row2;
+        
+        double x1 = (col1 - xcenter) * crystal_pitch;
+        double x2 = (col2 - xcenter) * crystal_pitch;
         double z1 = (row1 - zcenter) * crystal_pitch;
+        double z2 = (row2 - zcenter) * crystal_pitch;
         
+        int azimuth_segment = round( (double) (col2 - col1) / (double) span );
+        if (azimuth_segment < 0) { azimuth_segment += azimuth_count; }
+        if ( azimuth_segment < 0 || azimuth_segment >= azimuth_count ) {
+            printf("azimuth segment = %d\n", azimuth_segment);
+            terminate_with_error("azimuth segment is out of bounds");
+        }
+        int tilt_segment = round( (double) (row2 - row1) / (double) span );
+        if ( tilt_segment < 0 ) { tilt_segment += segment_count; }
+        if ( tilt_segment < 0 || tilt_segment >= segment_count ) {
+            printf("Tilt segment = %d\n", tilt_segment);
+            terminate_with_error("tilt segment is out of bounds");
+        }
+        
+        sino_coord(x1, x2, y1, y2, z1, z2, &r, &phi, &theta, &z);
+        r += xcenterbins;
+        z += zcenterbins;
+        // implementing bilinear interpolation here
+        int   i = floor(r);
+        int   j = floor(z);
+        float fx = r-i;
+        float fy = z-j;
+        
+        int index = j * radial_bins + i;
+        index += azimuth_segment * projection_size;
+        index += tilt_segment * azimuth_count * projection_size;
+        if (index < planogram_size && index >= 0){
+            planogram[index]   += (1.0-fx)*(1.0-fy);
+            planogram[index+1] +=  fx*(1.0-fy);
+            planogram[index+radial_bins]   +=  (1.0-fx)*fy;
+            planogram[index+radial_bins+1] +=  fx*fy;
+        } else {
+            printf("Something's wrong with r %6.3lf and z %6.3lf\n", r, round(z));
+        }
+        event_count++;
+        if( (event_count % 1000000)==0 ) printf("%10d events processed. scan time = %7.1lf minutes\n", event_count, (float) time/60000.0);
+        
+    }
+    
+    printf("%10d events processed. scan time = %7.1lf minutes\n", event_count, (float) time/60000.0);
+    fclose( fp );
+    
+    char  filename[255];
+    sprintf(filename,"%s_Det1_raw.img", basename);
+    write_i4_array( &rawimageD1[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
+    sprintf(filename,"%s_Det2_raw.img", basename);
+    write_i4_array( &rawimageD2[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
+    
+    sprintf(filename,"%s_measured_projections.img", basename);
+    write_r4_array( &planogram[0], planogram_size, filename);
+    
+}
+
+//************************************** create_normplanogram **************************
+void create_normplanogram( float *normplanogram, const int planogram_size)
+{   //we are assigning q count to each line-of-response and bin it into the planogram
+    // this can be used in lieu of a true normalization correction
+    
+    char    filename[255];
+    double y1 = (detector_distance * (-0.5));
+    double y2 = (detector_distance * 0.5);
+    double xcenter = (DETECTOR_COLS - 1) * 0.5;
+    double zcenter = (DETECTOR_ROWS - 1) * 0.5;
+    double r, phi, z, theta;
+    double xcenterbins = xcenter * crystal_pitch /bin_width;
+    double zcenterbins = zcenter * crystal_pitch /bin_width;
+    
+    for (int row1 = 0; row1 < DETECTOR_ROWS; row1++) {
+        double z1 = (row1 - zcenter) * crystal_pitch;
         for (int row2 = 0; row2 < DETECTOR_ROWS; row2++) {
-            
             double z2 = (row2 - zcenter) * crystal_pitch;
             int tilt_segment = round( (double) (row2 - row1) / (double) span );
             if ( tilt_segment < 0 ) { tilt_segment += segment_count; }
@@ -120,59 +255,48 @@ int main( int argc, const char * argv[] )
             }
             
             for (int col1 = 0; col1 < DETECTOR_COLS; col1++) {
-                double x1 = (col1 - center) * crystal_pitch;
-                
+                double x1 = (col1 - xcenter) * crystal_pitch;
                 for (int col2 = 0; col2 < DETECTOR_COLS; col2++) {
-                    
                     int azimuth_segment = round( (double) (col2 - col1) / (double) span );
                     if (azimuth_segment < 0) { azimuth_segment += azimuth_count; }
                     if ( azimuth_segment < 0 || azimuth_segment >= azimuth_count ) {
                         printf("azimuth segment = %d\n", azimuth_segment);
                         terminate_with_error("azimuth segment is out of bounds");
                     }
-                    
-                    double r, phi, z, theta;
-                    double x2 = (col2 - center) * crystal_pitch;
+                    double x2 = (col2 - xcenter) * crystal_pitch;
                     
                     sino_coord(x1, x2, y1, y2, z1, z2, &r, &phi, &theta, &z);
-                    z += (slices / 2.0);
-                    
-                    int radial_coord = round(r + (center * 2.0));
-                    int index = round(z) * radial_bins + radial_coord;
-                    index += azimuth_segment * projection_size;
-                    index += tilt_segment * azimuth_count * projection_size;
-                    
+                    r += xcenterbins;
+                    z += zcenterbins;
+                    // implementing bilinear interpolation here
+                    int  i = floor(r);
+                    int  j = floor(z);
+                    float fx = r-i;
+                    float fy = z-j;
+                    int index = j * radial_bins + i;
+                    index += (tilt_segment * azimuth_count + azimuth_segment) * projection_size;
+                    //                    index += azimuth_segment * projection_size;
+                    //                    index += tilt_segment * azimuth_count * projection_size;
                     if (index < planogram_size && index >= 0){
-                        planogram[index]++;
+                        normplanogram[index]   += (1.0-fx)*(1.0-fy);
+                        normplanogram[index+1] +=  fx*(1.0-fy);
+                        normplanogram[index+radial_bins]   +=  (1.0-fx)*fy;
+                        normplanogram[index+radial_bins+1] +=  fx*fy;
                     } else {
                         printf("Somethings wrong with r %6.3lf and z %6.3lf\n", r, round(z));
                     }
-                    //printf("row1: %2d, row2: %2d, z: %6.3lf, theta: %6.3lf\n", row1, row2, z, theta * 180 / M_PI);
                 }
             }
         }
     }
-    
-    sprintf(filename, "%s_projections.img", basename);
-    write_i4_array(&planogram[0], planogram_size, filename);
-    
-    //    sprintf(filename,"%s_Det1_raw.img", basename);
-    //    write_i4_array( &rawimageD1[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
-    //    sprintf(filename,"%s_Det2_raw.img", basename);
-    //    write_i4_array( &rawimageD2[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
-    //    sprintf(filename,"%s_projection.img", basename);
-    //    write_i4_array( &proj_image[0], PROJECTOR_ROWS*PROJECTOR_COLS, filename);
-    printf("Wrote images to disk.\n");
-    
-    printf("Finished with PPI.\n");
-    return 0;
+    printf("norm planogram created.\n");
+    sprintf(filename, "norm_planogram.img");
+    write_r4_array(&normplanogram[0], planogram_size, filename);
 }
 
+
 //************************************** process_projection_image **************************
-void process_projection_image(char listfile[],
-                              unsigned int rawimageD1[], unsigned int rawimageD2[],
-                              unsigned int proj_image[],
-                              double acceptance_radius2)
+void process_2Dprojection_image(char listfile[], char basename[])
 {
     // open file
     FILE *fp = fopen( listfile, "rb" );
@@ -182,8 +306,17 @@ void process_projection_image(char listfile[],
         terminate_with_error(message);
     }
     
+    unsigned int rawimageD1[DETECTOR_ROWS * DETECTOR_COLS] = {0};
+    unsigned int rawimageD2[DETECTOR_ROWS * DETECTOR_COLS] = {0};
+    unsigned int proj_image[PROJECTOR_ROWS * PROJECTOR_COLS] = {0};
+    
     const int acqtimemilliseconds = acq_time_minutes * 60000;
-    int time, crystalindex1, crystalindex2, projectionindex, eventblock[EVENTBLOCK_SIZE];
+    int     time, crystalindex1, crystalindex2;
+    int     projectionindex, eventblock[EVENTBLOCK_SIZE];
+    double acceptance_radius = (detector_distance/crystal_pitch)*tan(M_PI*cone_angle/180.0);
+    double acceptance_radius2 = acceptance_radius*acceptance_radius;
+    printf("cone_angle = %6.1lf degrees  distance = %8.1lf mm\n", cone_angle, detector_distance);
+    printf("acceptance radius = %8.2lf  crystal units\n", acceptance_radius);
     
     while ( fread(&eventblock, sizeof(int), EVENT_ELEMENT_COUNT, fp) == EVENT_ELEMENT_COUNT ) {
         // get time, check if valid, skip special case
@@ -196,7 +329,6 @@ void process_projection_image(char listfile[],
         
         crystalindex1 = get_crystalindex( eventblock[1] );
         crystalindex2 = get_crystalindex( eventblock[2] );
-        
         rawimageD1[crystalindex1]++;
         rawimageD2[crystalindex2]++;
         
@@ -205,36 +337,44 @@ void process_projection_image(char listfile[],
             proj_image[projectionindex]++;
         }
     }
-    
     fclose( fp );
+    
+    char filename[255];
+    sprintf(filename,"%s_Det1_raw.img", basename);
+    write_i4_array( &rawimageD1[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
+    sprintf(filename,"%s_Det2_raw.img", basename);
+    write_i4_array( &rawimageD2[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
+    sprintf(filename,"%s_projection.img", basename);
+    write_i4_array( &proj_image[0], PROJECTOR_ROWS*PROJECTOR_COLS, filename);
 }
 
 
-//************************************** sino coordinates **************************
+//************************************** sino_coordinates **************************
 void sino_coord( double x1, double x2, double y1, double y2, double z1, double z2, double* r, double* phi, double* theta, double *z)
 {
-    *phi = atan2(x2 - x1, y2 - y1); // gets angle ( in rads )
-    *r = (-y2 * sin(*phi) + x2 * cos(*phi));// / bin_width; // get distance in bin width
-    *phi *= (180.0 / M_PI) / angular_bin_width; // converts to angular bin number
+    *phi = atan2(x2 - x1, y2 - y1);           // azimuth angle ( in rads )
+    *r = (-y2 * sin(*phi) + x2 * cos(*phi));  // radial distance (in mm)
+    //    *phi *= (180.0 / M_PI) / angular_bin_width;   // converts to angular bin number  (not needed currently)
     
     double temp = (y2 - y1) * (y2 - y1) + (x2 - x1) * (x2 - x1);
-    *theta = atan((z2 - z1) / sqrt(temp));
+    *theta = atan((z2 - z1) / sqrt(temp));     // tilt (or polar) angle
     
-    *z =sqrt(y1 * y1 + x1 * x1 - (*r)*(*r)) * sin(*theta);
+    *z =sqrt(y1 * y1 + x1 * x1 - (*r)*(*r)) * sin(*theta);  // axial location (in mm)
     *z += z1 * cos(*theta);
     *z /= bin_width;
     *r /= bin_width;
 }
 
+
 //************************************** calculate_projection_midplane_index **************************
 int calculate_projection_midplane_index( int crystalindex1, int crystalindex2, double acceptance_radius2 )
 {
-    int row1 = crystalindex1 / DETECTOR_COLS;
-    int row2 = crystalindex2 / DETECTOR_COLS;
+    int col1 = crystalindex1 / DETECTOR_ROWS;
+    int col2 = crystalindex2 / DETECTOR_ROWS;
     
-    int col1 = crystalindex1 % DETECTOR_COLS;
-    int col2 = crystalindex2 % DETECTOR_COLS;
-    col2 = (DETECTOR_COLS - 1) - col2;
+    int row1 = crystalindex1 % DETECTOR_ROWS;
+    int row2 = crystalindex2 % DETECTOR_ROWS;
+    row2 = (DETECTOR_ROWS - 1) - row2;
     
     int midplanerow = row1 + row2;
     int midplanecol = col1 + col2;
@@ -314,6 +454,10 @@ void parse_command_line(int argc, const char *argv[], char listfile[], char base
                     sscanf(&argv[i][2],"%lf", &acq_time_minutes);
                     printf("acquisition time = %6.1lf minutes\n", acq_time_minutes);
                     break;
+                case PROCESS_2D_PROJECTION_FLAG:
+                    printf("creating conventional 2D projection image.\n");
+                    conventional_2D_projection = 1;
+                    break;
                 default:
                 {
                     char message[255];
@@ -384,6 +528,27 @@ void write_i2_array(unsigned short array[], int nelements, char filename[])
 
 //************************************** write_i4_array ********************
 void write_i4_array(unsigned int array[], int nelements, char filename[])
+{
+    FILE *fp = fopen( filename,"wb");
+    if ( !fp ) {
+        char message[255];
+        sprintf(message,"Error opening file %s\n", filename);
+        terminate_with_error(message);
+    }
+    
+    size_t n = fwrite( &array[0], 4, nelements, fp);
+    if( n != nelements ) {
+        char message[255];
+        sprintf(message,"Write error! Only %zd words written instead of %d, file = %s\n", n, nelements, filename);
+        terminate_with_error(message);
+    }
+    
+    printf ("File %s was written to disk.\n", filename);
+    fclose(fp);
+}
+
+//************************************** write_r4_array ********************
+void write_r4_array(float array[], int nelements, char filename[])
 {
     FILE *fp = fopen( filename,"wb");
     if ( !fp ) {
