@@ -1,15 +1,19 @@
 //
 //  main.c
-//  PPI project  2D projection images from 2 opposed scintillator arrays
+//  PLATO project  3D image made with 2 opposed scintillator arrays
 //
 //  Created by Jurgen and Philip Seidel on 9/9/14.
 //  Copyright (c) 2014 Jurgen and Philip Seidel. All rights reserved.
+//
+//  new: input can be either a list mode file full of event data (extension ".bin")
+//                        or a projection data file  (file name ends with "measured_projections.img")
 //
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
+#include <sys/time.h>
 
 //************************************** CONSTANTS **************************
 #define DETECTOR_ROWS (59)
@@ -35,14 +39,24 @@
 #define DETECTOR_DISTANCE_FLAG 'D'
 #define ACQ_TIME_MINUTES_FLAG 'm'
 #define PROCESS_2D_PROJECTION_FLAG 'P'
+#define NORMALIZATION_FLAG 'N'
+#define ITERATIONS_FLAG 'i'
+#define TEST_FLAG 'T'
+
 
 //************************************** PROTOTYPES **************************
+void  back_project( float *image, short *image_mask, float *factors, float *weights, int xbins, int ybins, int zbins,
+                   float *measured_planogram, float *est_planogram, int planogram_size);
+void    calculate_normalization_correction( float *measured_planogram, int planogram_size);
 void    create_measured_planogram( float *planogram, const int planogram_size, char listfile[], char basename[]);
 void    create_normplanogram( float *planogram, const int planogram_size);
+void    create_image_mask( short int *image_mask, int xbins_half, int ybins_half, int zbins_half, float *normplanogram, int planogram_size);
+void    forward_project( float *image, short int *image_mask, int xbins, int ybins, int zbins, float *est_planogram, int planogram_size);
 void    parse_command_line( int argc, const char *argv[], char listfile[], char basename[] );
 void    parse_from_stdin( char listfile[], char basename[] );
 void    terminate_with_error( char message[] );
-void    write_i2_array( unsigned short array[], int nelements, char filename[] );
+void    read_r4_array(float array[], int nelements, char filename[]);
+void    write_i2_array( short array[], int nelements, char filename[] );
 void    write_i4_array( unsigned int array[], int nelements, char filename[] );
 void    write_r4_array( float array[], int nelements, char filename[] );
 void    write_array( const void *[], int, int, char[] );
@@ -50,6 +64,7 @@ void    process_2Dprojection_image( char[], char[] );
 int     get_crystalindex( int );
 int     calculate_projection_midplane_index( int, int, double );
 void    sino_coord( double, double, double, double, double, double, double*, double*, double*, double*);
+void    sino_coord_argus( double x1, double x2, double y1, double y2, double z1, double z2, double* r, double* phi, double* theta, double *s);
 
 
 //************************************** GLOBALS **************************
@@ -59,20 +74,27 @@ double  crystal_pitch = 1.6;     // in mm, distance between crystal centers
 int		keV_min = 250;
 int		keV_max = 700;
 int     conventional_2D_projection = 0;
+int     process_normalization = 0;
 double  acq_time_minutes = 1200.0; // acquisition time in minutes
 double  bin_width = 0.8; // == half of crystal pitch
 double  angular_bin_width = 2.1;
 const int radial_bins = 2 * DETECTOR_COLS - 1;
 const int axial_bins = 2 * DETECTOR_ROWS - 1;
-const int projection_size = radial_bins * axial_bins;
+const int projection_size = 51*117; // radial_bins * axial_bins;
 const int azimuth_count = 17;
 const int segment_count = 39;
 const int span = 3;
+double  voxel_size = 0.8;   // later change it to 0.4 mm
+int     iterations = 1;
+int     min_tilt = 0;
+int     max_tilt = 39;  //segment_count;  // was 39
+int     testing = 0;
+int     is_listfile = 0;
 
 //************************************** MAIN **************************
 int main( int argc, const char * argv[] )
 {
-    char listfile[255], basename[255];
+    char listfile[255], filename[255], basename[255];
     
     // get input data file name
     if ( argc > 1) {
@@ -85,6 +107,23 @@ int main( int argc, const char * argv[] )
         printf("File path parsed.\n");
     }
     
+    if(testing) {
+        double r, s, phi, theta;
+        double x1, x2, y1, y2, z1, z2;
+        
+        x1=-10.0; x2=20.0; y1=-20.0; y2=20.0; z1=-30.0; z2= 50.0;
+        sino_coord( x1, x2, y1, y2, z1, z2, &r, &phi, &theta, &s);
+        printf("x1=%6.2lf x2=%6.2lf y1=%6.2lf y2=%6.2lf z1=%6.2lf z2=%6.2lf r=%6.2lf s=%6.2lf phi=%8.3lf theta=%7.2lf\n", x1, x2, y1, y2, z1, z2, r, s, phi*180.0/M_PI, theta*180.0/M_PI);
+        sino_coord_argus( x1, x2, y1, y2, z1, z2, &r, &phi, &theta, &s);
+        printf("x1=%6.2lf x2=%6.2lf y1=%6.2lf y2=%6.2lf z1=%6.2lf z2=%6.2lf r=%6.2lf s=%6.2lf phi=%8.3lf theta=%7.2lf\n", x1, x2, y1, y2, z1, z2, r, s, phi*180.0/M_PI, theta*180.0/M_PI);
+        x1=-10.0; x2=20.0; y1=-20.0; y2=20.0; z1= 50.0; z2= -30.0;
+        sino_coord( x1, x2, y1, y2, z1, z2, &r, &phi, &theta, &s);
+        printf("x1=%6.2lf x2=%6.2lf y1=%6.2lf y2=%6.2lf z1=%6.2lf z2=%6.2lf r=%6.2lf s=%6.2lf phi=%8.3lf theta=%7.2lf\n", x1, x2, y1, y2, z1, z2, r, s, phi*180.0/M_PI, theta*180.0/M_PI);
+        sino_coord_argus( x1, x2, y1, y2, z1, z2, &r, &phi, &theta, &s);
+        printf("x1=%6.2lf x2=%6.2lf y1=%6.2lf y2=%6.2lf z1=%6.2lf z2=%6.2lf r=%6.2lf s=%6.2lf phi=%8.3lf theta=%7.2lf\n", x1, x2, y1, y2, z1, z2, r, s, phi*180.0/M_PI, theta*180.0/M_PI);
+        exit(0);
+    }
+    
     if(conventional_2D_projection) {
         process_2Dprojection_image(listfile, basename);
         printf("Finished with conventional 2D projection image.\n");
@@ -92,31 +131,257 @@ int main( int argc, const char * argv[] )
     }
     
     const int planogram_size = projection_size * azimuth_count * segment_count;
-    
-    // create a "normalization" planogram
     float *normplanogram;
     normplanogram = calloc(planogram_size, sizeof(float));
-    create_normplanogram( normplanogram, planogram_size);
     
-    // create the planogram from measured data in list mode file
     float *measured_planogram;
     measured_planogram = calloc(planogram_size, sizeof(float));
-    create_measured_planogram(measured_planogram, planogram_size, listfile, basename);
+    // bin the measured data (from the list mode file) into planogram
+    if(is_listfile) {
+        create_measured_planogram( measured_planogram, planogram_size, listfile, basename);
+    }
+    // or else read the planogram from file
+    else {
+        read_r4_array( measured_planogram, planogram_size, listfile);
+    }
     
-    // initialize image space
-    int xbins = radial_bins;
-    int ybins = round(detector_distance/0.8);
-    int zbins = axial_bins;
+    // create a "normalization" planogram or else read the normalization from file
+    if(process_normalization == 1) {
+        calculate_normalization_correction( measured_planogram, planogram_size);
+        printf("finished with normalization procedure.\n");
+        return 0;
+    }
+    else {   // read normalization file
+        read_r4_array( normplanogram, planogram_size, "normalization_planogram.img");
+    }
+    
+    // set up image space
+    int xbins = radial_bins;                    // radial_bins = 51  (40 mm)
+    int ybins = round(0.9*detector_distance/0.8);   //  ybins  = 45  (36 mm) we are using 90% of the detector_distance
+    int zbins = axial_bins;                     // axial_bins = 117  (93 mm)
     int image_size = xbins * ybins * zbins;
     float *image;
     image = calloc( image_size, sizeof(float));
     
-    printf("Wrote images to disk.\n");
-    printf("Finished with PLATO code.\n");
+    //initialize image
+    int i, j, k;
+    double totalcounts = 0.0;
+    for(i=0; i<planogram_size; i++) totalcounts += measured_planogram[i];
+    float counts_per_voxel = totalcounts/image_size;
+    for(i=0; i<image_size; i++) image[i] = counts_per_voxel;
+    
+    // start timer
+    // time variables
+    struct 	timeval  tv_start;
+    struct 	timezone tz_start;
+    gettimeofday( &tv_start, &tz_start);
+    double tstart = tv_start.tv_sec + 0.000001*tv_start.tv_usec;
+    
+    // create image mask that tells us which part of the image will show up in a given planogram
+    int image_mask_size =  xbins*ybins*zbins;
+    image_mask_size *= segment_count*azimuth_count;
+    printf("Size of image mask = %d bytes\n", image_mask_size*2);
+    short int *image_mask;
+    image_mask = calloc( image_mask_size, sizeof(short int));
+    create_image_mask( image_mask, xbins, ybins, zbins, normplanogram, planogram_size);
+    
+    gettimeofday(&tv_start,&tz_start);
+    double tstop = tv_start.tv_sec + 0.000001*tv_start.tv_usec;
+    double elapsed_time = tstop - tstart;
+    printf("create image mask took %10.2lf seconds.\n", elapsed_time);
+    double tstart2 = tv_start.tv_sec + 0.000001*tv_start.tv_usec;
+    
+    float *est_planogram;
+    est_planogram = calloc(planogram_size, sizeof(float));
+    
+    float *factors;
+    factors = calloc( image_size, sizeof(float));
+    float *weights;
+    weights = calloc( image_size, sizeof(float));
+    
+    // start the cycle over iterations
+    for(i=0; i<iterations; i++) {
+        forward_project( image, image_mask, xbins, ybins, zbins, est_planogram, planogram_size);
+        sprintf(filename,"estimated projections iteration_%2.2d.raw", i+1);
+        write_r4_array( est_planogram, planogram_size, filename);
+        for( int j=0; j< planogram_size; j++) est_planogram[j] *= normplanogram[j];
+        back_project( image, image_mask, factors, weights, xbins, ybins, zbins, measured_planogram, est_planogram, planogram_size);
+        sprintf(filename,"estimated image iteration_%2.2d.raw", i+1);
+        write_r4_array( image, xbins*ybins*zbins, filename);
+    }
+    
+    gettimeofday(&tv_start,&tz_start);
+    tstop = tv_start.tv_sec + 0.000001*tv_start.tv_usec;
+    printf("\n%2d iteration(s) took %10.2lf seconds.\n", iterations, tstop-tstart2);
+    printf("\ndone!\n");
+    
+    printf("Finished with PLATO code.\n\n");
     return 0;
 }
 
 
+//************************************** back projection *****************************************
+void  back_project( float *image, short *image_mask, float *factors, float *weights, int xbins, int ybins, int zbins,
+                   float *measured_planogram, float *est_planogram, int planogram_size)
+{
+    // takes the ratio of measured to estimated projections (point by point) and projects it back over the image space
+    // ratio = measured_planogram[i]/est_planogram[i];  (if measured_planogram > 0; else 0)
+    
+    double xcenter = (DETECTOR_COLS - 1) * 0.5;
+    double zcenter = (DETECTOR_ROWS - 1) * 0.5;
+    double xcenterbins = xcenter * crystal_pitch /bin_width;
+    double zcenterbins = zcenter * crystal_pitch /bin_width;
+    float  tmp;
+    double temp, theta, phi, x,y,z, r,s;
+    double dx, dz;
+    int    ctr = 0;
+    
+    for( int i=0; i< planogram_size; i++) {
+        if((tmp=est_planogram[i]) > 0.01) {
+            est_planogram[i] = measured_planogram[i]/tmp;
+        }
+        else {
+            est_planogram[i] = 0.0;
+        }
+    }
+    
+    for( int i=0; i< xbins*ybins*zbins; i++) factors[i]=weights[i]=0.0;
+    
+    // for all azimuth and tilt angles walk through image and project factors onto image voxel
+    for( int tilt = min_tilt; tilt < max_tilt; tilt++) {      // may want to restrict this to "positive" tilt's
+        if( tilt > segment_count/2)
+            dz = (tilt-segment_count) * span * crystal_pitch;
+        else
+            dz = tilt * span * crystal_pitch;
+        
+        for( int azi = 0; azi < azimuth_count; azi++ ) {
+            if(azi > azimuth_count/2)
+                dx = (azi - azimuth_count)*span*crystal_pitch;
+            else
+                dx = azi*span*crystal_pitch;
+            
+            phi = atan2( dx, detector_distance);           // azimuth angle ( in rads )
+            double sinphi = sin(phi);
+            double cosphi = cos(phi);
+            double tanphi = dx/detector_distance;
+            
+            temp = detector_distance * detector_distance + dx * dx;
+            theta = atan( dz / sqrt(temp));     // tilt (or polar) angle
+            double costheta = cos(theta);
+            double sintheta = sin(theta);
+            
+            for( int k=0; k<zbins; k++) {                       // current voxelsize = 0.8 mm
+                z = (k - zbins/2) * voxel_size;                 // z-coordinate of voxel in mm;  zbins/2 = 58;
+                for( int j=0; j<ybins; j++) {
+                    y = (j-ybins/2) * voxel_size;               // y-coordinate of voxel in mm;  ybins/2 = 22;
+                    for(int i=0; i< xbins; i++) {
+                        int mask_index = i + j*xbins + k*ybins*xbins;
+                        mask_index += (tilt * azimuth_count + azi) * (zbins*ybins*xbins);
+                        if(image_mask[mask_index] == 0) continue;
+                        x = (i-xbins/2) * voxel_size;           // x-coordinate of voxel in mm;  xbins/2 = 25;
+                        
+                        r = (-y * sinphi + x * cosphi);         // radial distance (in mm) in projection
+                        if( fabs(r) > 20.0) continue;
+                        double arg = y*y + x*x - r*r;
+                        if(arg < 0.0) {
+                            //                          printf("WARNING: tilt=%2d azi=%2d x = %6.3lf y = %6.3lf z = %6.1lf r %6.3lf and arg %6.3lf\n", tilt, azi, x, y, z, r, arg);
+                            continue;
+                        }
+                        if( y < x*tanphi){
+                            s = z * costheta + sqrt(arg) * sintheta;    // axial location (in mm) in projection
+                        }
+                        else {
+                            s = z * costheta - sqrt(arg) * sintheta;
+                        }
+                        if( fabs(s) > 46.8) continue;
+                        r /= bin_width;
+                        r += xcenterbins;
+                        s /= bin_width;
+                        s += zcenterbins;
+                        // implementing bilinear interpolation here
+                        int  ip = floor(r);
+                        int  jp = floor(s);
+                        float fx = r-ip;
+                        float fy = s-jp;
+                        int index = jp * radial_bins + ip;
+                        index += (tilt * azimuth_count + azi) * projection_size;
+                        int voxel = i + j*xbins+ k*ybins*xbins;
+                        if (index < planogram_size && index >= 0){
+                            tmp =  est_planogram[index] * (1.0-fx)*(1.0-fy);
+                            tmp += est_planogram[index+1] * fx*(1.0-fy);
+                            tmp += est_planogram[index+radial_bins] * (1.0-fx)*fy;
+                            tmp += est_planogram[index+radial_bins+1] * (fx*fy);
+                            factors[voxel] += tmp;
+                            weights[voxel] += 1.0;
+                        } else {
+                            printf("Something is wrong: tilt=%2d azi=%2d x = %6.1lf y = %6.1lf  z = %6.1lf  r %6.3lf and s %6.3lf\n", tilt, azi, x, y, z, r, s);
+                            if(ctr++ > 10) exit(-1);
+                        }
+                    }
+                }
+            }
+            
+        }
+    }
+    
+    // update image (finally!)
+    for( int i=0; i< xbins*ybins*zbins; i++) if(weights[i]>0.0) image[i] *= (factors[i]/weights[i]);
+    
+    return;
+}
+
+
+//************************************** create_normalization planogram **************************
+void  calculate_normalization_correction( float *measured_planogram, int planogram_size)
+{
+    // measured data have been binned into measured_planogram; now we have to correct the various
+    // projections for differences in flood phantom thickness according to tilt and azimuth angles
+    // First, normalize counts per straight projection (tilt=azimuth=0), then apply angle corrections to tother projections
+    
+    double sum = 0.0;
+    int    index=0;
+    for(int j=0; j<2*DETECTOR_ROWS-1; j++) {
+        for( int i=0; i< 2*DETECTOR_COLS-1; i++) {
+            sum += measured_planogram[index];
+            index++;
+        }
+    }
+    double avg_per_pixel = sum/index;
+    printf("avg_per_pixel = %10.3lf\n", avg_per_pixel);
+    
+    double  dx, dz;
+    index=0;
+    for( int tilt = 0; tilt < segment_count; tilt++) {      // may want to restrict this to "positive" tilt's
+        if( tilt > segment_count/2)
+            dz = (tilt-segment_count) * span * crystal_pitch;
+        else
+            dz = tilt * span * crystal_pitch;
+        
+        for( int azi = 0; azi < azimuth_count; azi++ ) {
+            if(azi > azimuth_count/2)
+                dx = (azi - azimuth_count)*span*crystal_pitch;
+            else
+                dx = azi*span*crystal_pitch;
+            
+            double phi = atan2( dx, detector_distance);     // azimuth angle ( in rads )
+            double cosphi = cos(phi);
+            
+            double temp = detector_distance * detector_distance + dx * dx;
+            double theta = atan( dz / sqrt(temp));     // tilt (or polar) angle
+            double costheta = cos(theta);
+            
+            for(int j=0; j<2*DETECTOR_ROWS-1; j++) {
+                for( int i=0; i< 2*DETECTOR_COLS-1; i++) {
+                    measured_planogram[index] /= (avg_per_pixel/(costheta*cosphi));
+                    index++;
+                }
+            }
+        }
+    }
+    // write result to disk
+    write_r4_array( &measured_planogram[0], planogram_size, "normalization_planogram.img");
+    
+}
 //************************************** create_normplanogram **************************
 void create_measured_planogram( float *planogram, const int planogram_size, char listfile[], char basename[])
 {   // we reading list mode data file on an event-by-event basis and placing events into projections
@@ -130,7 +395,7 @@ void create_measured_planogram( float *planogram, const int planogram_size, char
     }
     
     const int acqtimemilliseconds = acq_time_minutes * 60000;
-    int time, crystalindex1, crystalindex2, eventblock[EVENTBLOCK_SIZE];
+    int time=0, crystalindex1, crystalindex2, eventblock[EVENTBLOCK_SIZE];
     
     unsigned int rawimageD1[DETECTOR_ROWS * DETECTOR_COLS] = {0};
     unsigned int rawimageD2[DETECTOR_ROWS * DETECTOR_COLS] = {0};
@@ -139,7 +404,7 @@ void create_measured_planogram( float *planogram, const int planogram_size, char
     double y2 = (detector_distance * 0.5);
     double xcenter = (DETECTOR_COLS - 1) * 0.5;
     double zcenter = (DETECTOR_ROWS - 1) * 0.5;
-    double r, phi, z, theta;
+    double r, phi, s, theta;
     double xcenterbins = xcenter * crystal_pitch /bin_width;
     double zcenterbins = zcenter * crystal_pitch /bin_width;
     
@@ -190,14 +455,14 @@ void create_measured_planogram( float *planogram, const int planogram_size, char
             terminate_with_error("tilt segment is out of bounds");
         }
         
-        sino_coord(x1, x2, y1, y2, z1, z2, &r, &phi, &theta, &z);
+        sino_coord(x1, x2, y1, y2, z1, z2, &r, &phi, &theta, &s);
         r += xcenterbins;
-        z += zcenterbins;
+        s += zcenterbins;
         // implementing bilinear interpolation here
         int   i = floor(r);
-        int   j = floor(z);
+        int   j = floor(s);
         float fx = r-i;
-        float fy = z-j;
+        float fy = s-j;
         
         int index = j * radial_bins + i;
         index += azimuth_segment * projection_size;
@@ -208,7 +473,7 @@ void create_measured_planogram( float *planogram, const int planogram_size, char
             planogram[index+radial_bins]   +=  (1.0-fx)*fy;
             planogram[index+radial_bins+1] +=  fx*fy;
         } else {
-            printf("Something's wrong with r %6.3lf and z %6.3lf\n", r, round(z));
+            printf("Something's wrong with r= %6.3lf and s= %6.3lf\n", r, round(s));
         }
         event_count++;
         if( (event_count % 1000000)==0 ) printf("%10d events processed. scan time = %7.1lf minutes\n", event_count, (float) time/60000.0);
@@ -219,10 +484,10 @@ void create_measured_planogram( float *planogram, const int planogram_size, char
     fclose( fp );
     
     char  filename[255];
-    sprintf(filename,"%s_Det1_raw.img", basename);
-    write_i4_array( &rawimageD1[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
-    sprintf(filename,"%s_Det2_raw.img", basename);
-    write_i4_array( &rawimageD2[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
+    //    sprintf(filename,"%s_Det1_raw.img", basename);
+    //    write_i4_array( &rawimageD1[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
+    //    sprintf(filename,"%s_Det2_raw.img", basename);
+    //   write_i4_array( &rawimageD2[0], DETECTOR_ROWS*DETECTOR_COLS, filename);
     
     sprintf(filename,"%s_measured_projections.img", basename);
     write_r4_array( &planogram[0], planogram_size, filename);
@@ -238,7 +503,7 @@ void create_normplanogram( float *normplanogram, const int planogram_size)
     double y1 = (detector_distance * (-0.5));
     double y2 = (detector_distance * 0.5);
     double xcenter = (DETECTOR_COLS - 1) * 0.5;
-    double zcenter = (DETECTOR_ROWS - 1) * 0.5;
+    double zcenter = (DETECTOR_ROWS - 1) * 0.5;     // zcenter = 29.0
     double r, phi, z, theta;
     double xcenterbins = xcenter * crystal_pitch /bin_width;
     double zcenterbins = zcenter * crystal_pitch /bin_width;
@@ -275,15 +540,16 @@ void create_normplanogram( float *normplanogram, const int planogram_size)
                     float fy = z-j;
                     int index = j * radial_bins + i;
                     index += (tilt_segment * azimuth_count + azimuth_segment) * projection_size;
-                    //                    index += azimuth_segment * projection_size;
-                    //                    index += tilt_segment * azimuth_count * projection_size;
+                    
                     if (index < planogram_size && index >= 0){
                         normplanogram[index]   += (1.0-fx)*(1.0-fy);
                         normplanogram[index+1] +=  fx*(1.0-fy);
-                        normplanogram[index+radial_bins]   +=  (1.0-fx)*fy;
-                        normplanogram[index+radial_bins+1] +=  fx*fy;
+                        if(j<116) {
+                            normplanogram[index+radial_bins]   +=  (1.0-fx)*fy;
+                            normplanogram[index+radial_bins+1] +=  fx*fy;
+                        }
                     } else {
-                        printf("Somethings wrong with r %6.3lf and z %6.3lf\n", r, round(z));
+                        printf("Something's wrong with r %6.3lf and z %6.3lf\n", r, round(z));
                     }
                 }
             }
@@ -294,6 +560,197 @@ void create_normplanogram( float *normplanogram, const int planogram_size)
     write_r4_array(&normplanogram[0], planogram_size, filename);
 }
 
+
+//************************************** create image mask *************************************************************
+void create_image_mask( short int *image_mask, int xbins, int ybins, int zbins, float *normplanogram, int planogram_size)
+{
+    // note that  xbins, ybins, zbins here a half of image xbins, etc. used in forward_project()
+    // voxelsize here is 1.6mm instead of 0.8mm
+    
+    double xcenter = (DETECTOR_COLS - 1) * 0.5;
+    double zcenter = (DETECTOR_ROWS - 1) * 0.5;
+    double xcenterbins = xcenter * crystal_pitch /bin_width;
+    double zcenterbins = zcenter * crystal_pitch /bin_width;
+    double  temp, theta, phi, x,y,z, r,s;
+    double dx, dz;
+    double mask_voxel_size = voxel_size;
+    
+    // for all azimuth and tilt angles walk through image and project onto planogram
+    for( int tilt = 0; tilt < segment_count; tilt++) {      // may want to restrict this to "positive" tilt's
+        if( tilt > segment_count/2)
+            dz = (tilt-segment_count) * span * crystal_pitch;
+        else
+            dz = tilt * span * crystal_pitch;
+        
+        for( int azi = 0; azi < azimuth_count; azi++ ) {
+            if(azi > azimuth_count/2)
+                dx = (azi - azimuth_count)*span*crystal_pitch;
+            else
+                dx = azi*span*crystal_pitch;
+            
+            phi = atan2( dx, detector_distance);           // azimuth angle ( in rads )
+            double sinphi = sin(phi);
+            double cosphi = cos(phi);
+            double tanphi = dx/detector_distance;
+            
+            temp = detector_distance * detector_distance + dx * dx;
+            theta = atan( dz / sqrt(temp));     // tilt (or polar) angle
+            double costheta = cos(theta);
+            double sintheta = sin(theta);
+            
+            // xbins, ybins, zbins here a half of image xbins, etc.
+            for( int k=0; k<zbins; k++) {                       // this voxelsize = 1.6 mm
+                z = (k - zbins/2) * mask_voxel_size;                 // z-coordinate of voxel in mm
+                for( int j=0; j<ybins; j++) {
+                    y = (j-ybins/2) * mask_voxel_size;               // y-coordinate of voxel in mm
+                    for( int i=0; i< xbins; i++) {
+                        x = (i-xbins/2) * mask_voxel_size;           // x-coordinate of voxel in mm
+                        r = (-y * sinphi + x * cosphi);         // radial distance (in mm) in projection
+                        double arg = y*y + x*x - r*r;
+                        if(arg < 0.0) {
+                            if(arg > -5.0E-13)
+                                arg = 0.0;
+                            else {
+                                printf("WARNING: tilt=%2d azi=%2d sinphi=%8.4lf  cosphi=%8.4lf x = %10.4lf y = %10.4lf z = %7.2lf  r=%10.6lf and arg = %13.9lf\n", tilt, azi, sinphi, cosphi, x, y, z, r, arg*10000.0);
+                                continue;
+                            }
+                        }
+                        if( y < x*tanphi){
+                            s = z * costheta + sqrt(arg) * sintheta;    // axial location (in mm) in projection
+                        }
+                        else {
+                            s = z * costheta - sqrt(arg) * sintheta;
+                        }
+                        r /= bin_width;
+                        r += xcenterbins;
+                        s /= bin_width;
+                        s += zcenterbins;
+                        
+                        int  ip = round(r);
+                        int  jp = round(s);
+                        if( ip<0 || ip > 50) continue;      // out of projection
+                        if( jp<0 || jp > 116) continue;      // out of projection
+                        int index = jp * radial_bins + ip;      //projection_size = radial_bins * axial_bins;
+                        
+                        index += (tilt * azimuth_count + azi) * projection_size;
+                        if(normplanogram[index]>0.01) {
+                            int maskvoxel = i + j*xbins+ k*ybins*xbins;
+                            maskvoxel += (tilt * azimuth_count + azi) * (zbins*ybins*xbins);
+                            //                            printf("        maskvoxel2 = %8d\n", maskvoxel);
+                            image_mask[ maskvoxel ]++;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    int image_mask_size = segment_count*azimuth_count * (xbins*ybins*zbins);
+    write_i2_array( image_mask, image_mask_size, "image_mask.raw");
+}
+
+
+//************************************** forward_projection of estimated image **************************
+void forward_project( float *image, short int *image_mask, int xbins, int ybins, int zbins, float *est_planogram, int planogram_size)
+{
+    double xcenter = (DETECTOR_COLS - 1) * 0.5;
+    double zcenter = (DETECTOR_ROWS - 1) * 0.5;
+    double xcenterbins = xcenter * crystal_pitch /bin_width;        // = 25
+    double zcenterbins = zcenter * crystal_pitch /bin_width;        // = 58
+    double temp, theta, phi, x,y,z, r,s;
+    double dx, dz;
+    int    ctr = 0;
+    int    azi, tilt;
+    
+    // for all azimuth and tilt angles walk through image and project onto planogram
+    for( tilt = min_tilt; tilt < max_tilt; tilt++) {      // may want to restrict this to "positive" tilt's
+        if( tilt > segment_count/2)
+            dz = (tilt-segment_count) * span * crystal_pitch;
+        else
+            dz = tilt * span * crystal_pitch;
+        
+        for( azi = 0; azi < azimuth_count; azi++ ) {
+            if(azi > azimuth_count/2)
+                dx = (azi - azimuth_count)*span*crystal_pitch;
+            else
+                dx = azi*span*crystal_pitch;
+            
+            
+            phi = atan2( dx, detector_distance);           // azimuth angle ( in rads )
+            double sinphi = sin(phi);
+            double cosphi = cos(phi);
+            double tanphi = dx / detector_distance;
+            
+            //            printf("azi = %2d  dx = %8.3lf phi = %8.2lf\n", azi, dx, phi*180.0/M_PI);
+            
+            temp = detector_distance * detector_distance + dx * dx;
+            theta = atan( dz / sqrt(temp));     // tilt (or polar) angle
+            double costheta = cos(theta);
+            double sintheta = sin(theta);
+            
+            // loop over image space
+            for( int k=0; k<zbins; k++) {                       // current voxelsize = 0.8 mm
+                z = (k - zbins/2) * voxel_size;                 // z-coordinate of voxel in mm;  zbins/2 = 58;
+                for( int j=0; j<ybins; j++) {
+                    y = (j-ybins/2) * voxel_size;               // y-coordinate of voxel in mm;  ybins/2 = 22;
+                    for(int i=0; i< xbins; i++) {
+                        int mask_index = i + j*xbins + k*ybins*xbins;
+                        mask_index += (tilt * azimuth_count + azi) * (zbins*ybins*xbins);
+                        if(image_mask[mask_index] == 0) continue;
+                        x = (i-xbins/2) * voxel_size;           // x-coordinate of voxel in mm;  xbins/2 = 25;
+                        
+                        r = (-y * sinphi + x * cosphi);         // radial distance (in mm) in projection
+                        if( fabs(r) > 20.0) {
+                            printf("ERROR: tilt=%2d azi=%2d phi = %7.3lf, x = %6.3lf y = %6.3lf  z = %6.1lf  r = %6.3lf\n", tilt, azi, phi, x, y, z, r);
+                            if(ctr++ > 10) exit(-1);
+                            continue;
+                        }
+                        double arg = y*y + x*x - r*r;
+                        if(arg < 0.0) {
+                            if(arg > -5.0E-13) {
+                                arg = 0.0;
+                            }
+                            else {
+                                printf("WARNING: tilt=%2d azi=%2d x = %6.3lf y = %6.3lf  z = %6.1lf  r %6.3lf and arg %6.3lf\n", tilt, azi, x, y, z, r, arg);
+                                continue;
+                            }
+                        }
+                        if( y < x*tanphi){
+                            s = z * costheta + sqrt(arg) * sintheta;    // axial location (in mm) in projection
+                        }
+                        else {
+                            s = z * costheta - sqrt(arg) * sintheta;
+                        }
+                        if( fabs(s) > 46.8) continue;
+                        r /= bin_width;
+                        r += xcenterbins;
+                        s /= bin_width;
+                        s += zcenterbins;
+                        // implementing bilinear interpolation here
+                        int  ip = floor(r);
+                        int  jp = floor(s);
+                        float fx = r-ip;
+                        float fy = s-jp;
+                        int index = jp * radial_bins + ip;
+                        index += (tilt * azimuth_count + azi) * projection_size;
+                        int voxel = i + j*xbins+ k*ybins*xbins;
+                        float counts  = image[voxel];
+                        if (index < planogram_size && index >= 0){
+                            est_planogram[index]   +=   counts*(1.0-fx)*(1.0-fy);
+                            est_planogram[index+1] +=   counts*fx*(1.0-fy);
+                            est_planogram[index+radial_bins]   +=  counts*(1.0-fx)*fy;
+                            est_planogram[index+radial_bins+1] +=  counts*fx*fy;
+                        } else {
+                            printf("Something is wrong: tilt=%2d azi=%2d x = %6.1lf y = %6.1lf  z = %6.1lf  r %6.3lf and s %6.3lf\n", tilt, azi, x, y, z, r, s);
+                            if(ctr++ > 10) exit(-1);
+                        }
+                        
+                    }
+                }
+            }
+            
+        }
+    }
+}
 
 //************************************** process_projection_image **************************
 void process_2Dprojection_image(char listfile[], char basename[])
@@ -350,7 +807,7 @@ void process_2Dprojection_image(char listfile[], char basename[])
 
 
 //************************************** sino_coordinates **************************
-void sino_coord( double x1, double x2, double y1, double y2, double z1, double z2, double* r, double* phi, double* theta, double *z)
+void sino_coord( double x1, double x2, double y1, double y2, double z1, double z2, double* r, double* phi, double* theta, double *s)
 {
     *phi = atan2(x2 - x1, y2 - y1);           // azimuth angle ( in rads )
     *r = (-y2 * sin(*phi) + x2 * cos(*phi));  // radial distance (in mm)
@@ -359,13 +816,29 @@ void sino_coord( double x1, double x2, double y1, double y2, double z1, double z
     double temp = (y2 - y1) * (y2 - y1) + (x2 - x1) * (x2 - x1);
     *theta = atan((z2 - z1) / sqrt(temp));     // tilt (or polar) angle
     
-    *z =sqrt(y1 * y1 + x1 * x1 - (*r)*(*r)) * sin(*theta);  // axial location (in mm)
-    *z += z1 * cos(*theta);
-    *z /= bin_width;
+    double arg = y1 * y1 + x1 * x1 - (*r)*(*r);
+    *s =sqrt(arg) * sin(*theta) + z1 * cos(*theta);  // axial location (in mm)
+    *s /= bin_width;
     *r /= bin_width;
 }
 
-
+//************************************** sino_coordinates argus**************************
+void sino_coord_argus( double x1, double x2, double y1, double y2, double z1, double z2, double* r, double* phi, double* theta, double *s)
+{
+    *phi 	= atan2( x2-x1, y2-y1);
+    double cosphi = cos(*phi);
+    double sinphi = sin(*phi);
+    *r		= (x2*cosphi-y2*sinphi)/bin_width;		//! rho is a floating point number
+    
+    double u2 = fabs(x2*sinphi+y2*cosphi);					//! NEW: abs(u2) because u2 can be negative
+    double  u = sqrt((x2-x1)*(x2-x1) + (y2-y1)*(y2-y1));
+    double costheta = u/sqrt(u*u+(z2-z1)*(z2-z1));
+    //    ! 	tantheta = (z2-z1)/u
+    *theta = atan((z2-z1)/u);
+    *s = (z2-u2*(z2-z1)/u)*costheta;
+    *s /= bin_width;
+    
+}
 //************************************** calculate_projection_midplane_index **************************
 int calculate_projection_midplane_index( int crystalindex1, int crystalindex2, double acceptance_radius2 )
 {
@@ -404,7 +877,7 @@ int get_crystalindex( int eventblock )
 }
 
 //************************************** parse_command_line **************************
-void parse_command_line(int argc, const char *argv[], char listfile[], char basename[])
+void parse_command_line(int argc, const char *argv[], char inputfile[], char basename[])
 {
     // command line must specify list file name first and it must be followed
     //    by the other parameters
@@ -414,20 +887,29 @@ void parse_command_line(int argc, const char *argv[], char listfile[], char base
         terminate_with_error("Not enough arguments to find filename!");
     }
     
-    if( sscanf( &argv[1][0], "%[^\t\n]", &listfile[0]) <= 0 ) {
+    if( sscanf( &argv[1][0], "%[^\t\n]", &inputfile[0]) <= 0 ) {
         terminate_with_error("No luck parsing command line for filename!");
     }
     
-    printf("Filename = %s\n", listfile);
-    
+    printf("Filename = %s\n", inputfile);
+    // list file or projections?
     // basename = list file name without extension
-    char * extension = strrchr(listfile,'.');
-    if(extension == NULL)
-        strcpy( basename, listfile);
+    char * extension = strstr(inputfile,".bin");
+    if(extension == NULL) {  // projection file?
+        extension = strstr(inputfile,"_measured_projections.img");
+        if(extension == NULL) {
+            terminate_with_error("No luck parsing command line for proper extension!");
+        }
+        else {
+            size_t len = strlen(inputfile) - strlen(extension);
+            strncpy( basename, inputfile, len);
+        }
+    }
     else {
         // len is the length of the basename
-        size_t len = strlen(listfile) - strlen(extension);
-        strncpy( basename, listfile, len);
+        size_t len = strlen(inputfile) - strlen(extension);
+        strncpy( basename, inputfile, len);
+        is_listfile = 1;
     }
     printf("basename = %s  extension = %s\n", basename, extension);
     
@@ -458,6 +940,19 @@ void parse_command_line(int argc, const char *argv[], char listfile[], char base
                     printf("creating conventional 2D projection image.\n");
                     conventional_2D_projection = 1;
                     break;
+                case ITERATIONS_FLAG:
+                    iterations = atoi(&argv[i][2]);
+                    printf("doing %d iterations!\n", iterations);
+                    break;
+                case NORMALIZATION_FLAG:
+                    process_normalization = 1;
+                    printf("creating normalization planogram.\n");
+                    break;
+                case TEST_FLAG:
+                    testing = 1;
+                    printf("testing testing testing\n");
+                    break;
+                    
                 default:
                 {
                     char message[255];
@@ -506,7 +1001,7 @@ void terminate_with_error(char message[])
 }
 
 //************************************** write_i2_array ********************
-void write_i2_array(unsigned short array[], int nelements, char filename[])
+void write_i2_array(short array[], int nelements, char filename[])
 {
     FILE *fp = fopen( filename,"wb");
     if ( !fp ) {
@@ -565,6 +1060,27 @@ void write_r4_array(float array[], int nelements, char filename[])
     }
     
     printf ("File %s was written to disk.\n", filename);
+    fclose(fp);
+}
+
+//************************************** read_r4_array ********************
+void read_r4_array(float array[], int nelements, char filename[])
+{
+    FILE *fp = fopen( filename,"rb");
+    if ( !fp ) {
+        char message[255];
+        sprintf(message,"Error opening file %s\n", filename);
+        terminate_with_error(message);
+    }
+    
+    size_t n = fread( &array[0], 4, nelements, fp);
+    if( n != nelements ) {
+        char message[255];
+        sprintf(message,"Write error! Only %zd words written instead of %d, file = %s\n", n, nelements, filename);
+        terminate_with_error(message);
+    }
+    
+    printf ("File %s was read from disk.\n", filename);
     fclose(fp);
 }
 
