@@ -52,8 +52,8 @@ void    create_measured_planogram( float *planogram, const int planogram_size, c
 void    create_normplanogram( float *planogram, const int planogram_size);
 void    create_image_mask( short int *image_mask, int xbins_half, int ybins_half, int zbins_half, float *normplanogram, int planogram_size);
 void    forward_project( float *image, short int *image_mask, int xbins, int ybins, int zbins, float *est_planogram, int planogram_size);
-void    parse_command_line( int argc, const char *argv[], char listfile[], char basename[] );
-void    parse_from_stdin( char listfile[], char basename[] );
+void    parse_command_line( int argc, const char *argv[], char listfile[], char basename[], char path[] );
+void    parse_from_stdin( char listfile[], char basename[], char path[] );
 void    terminate_with_error( char message[] );
 void    read_r4_array(float array[], int nelements, char filename[]);
 void    write_i2_array( short array[], int nelements, char filename[] );
@@ -85,7 +85,7 @@ const int azimuth_count = 17;
 const int segment_count = 39;
 const int span = 3;
 double  voxel_size = 0.8;   // later change it to 0.4 mm
-int     iterations = 1;
+int     iterations = 50;
 int     min_tilt = 0;
 int     max_tilt = 39;  //segment_count;  // was 39
 int     testing = 0;
@@ -94,34 +94,17 @@ int     is_listfile = 0;
 //************************************** MAIN **************************
 int main( int argc, const char * argv[] )
 {
-    char listfile[255], filename[255], basename[255];
+    char listfile[255], filename[255], basename[255], path[255];
     
     // get input data file name
     if ( argc > 1) {
         // use command line arguments
-        parse_command_line( argc, argv, listfile, basename);
+        parse_command_line( argc, argv, listfile, basename, path);
         printf("Command line parsed.\n");
     } else {
         // parse arguments from stdin // currently only gets file path
-        parse_from_stdin( listfile, basename);
+        parse_from_stdin( listfile, basename, path);
         printf("File path parsed.\n");
-    }
-    
-    if(testing) {
-        double r, s, phi, theta;
-        double x1, x2, y1, y2, z1, z2;
-        
-        x1=-10.0; x2=20.0; y1=-20.0; y2=20.0; z1=-30.0; z2= 50.0;
-        sino_coord( x1, x2, y1, y2, z1, z2, &r, &phi, &theta, &s);
-        printf("x1=%6.2lf x2=%6.2lf y1=%6.2lf y2=%6.2lf z1=%6.2lf z2=%6.2lf r=%6.2lf s=%6.2lf phi=%8.3lf theta=%7.2lf\n", x1, x2, y1, y2, z1, z2, r, s, phi*180.0/M_PI, theta*180.0/M_PI);
-        sino_coord_argus( x1, x2, y1, y2, z1, z2, &r, &phi, &theta, &s);
-        printf("x1=%6.2lf x2=%6.2lf y1=%6.2lf y2=%6.2lf z1=%6.2lf z2=%6.2lf r=%6.2lf s=%6.2lf phi=%8.3lf theta=%7.2lf\n", x1, x2, y1, y2, z1, z2, r, s, phi*180.0/M_PI, theta*180.0/M_PI);
-        x1=-10.0; x2=20.0; y1=-20.0; y2=20.0; z1= 50.0; z2= -30.0;
-        sino_coord( x1, x2, y1, y2, z1, z2, &r, &phi, &theta, &s);
-        printf("x1=%6.2lf x2=%6.2lf y1=%6.2lf y2=%6.2lf z1=%6.2lf z2=%6.2lf r=%6.2lf s=%6.2lf phi=%8.3lf theta=%7.2lf\n", x1, x2, y1, y2, z1, z2, r, s, phi*180.0/M_PI, theta*180.0/M_PI);
-        sino_coord_argus( x1, x2, y1, y2, z1, z2, &r, &phi, &theta, &s);
-        printf("x1=%6.2lf x2=%6.2lf y1=%6.2lf y2=%6.2lf z1=%6.2lf z2=%6.2lf r=%6.2lf s=%6.2lf phi=%8.3lf theta=%7.2lf\n", x1, x2, y1, y2, z1, z2, r, s, phi*180.0/M_PI, theta*180.0/M_PI);
-        exit(0);
     }
     
     if(conventional_2D_projection) {
@@ -132,10 +115,7 @@ int main( int argc, const char * argv[] )
     
     const int planogram_size = projection_size * azimuth_count * segment_count;
     float *normplanogram;
-    normplanogram = calloc(planogram_size, sizeof(float));
-    
-    float *measured_planogram;
-    measured_planogram = calloc(planogram_size, sizeof(float));
+    float *measured_planogram = calloc(planogram_size, sizeof(float));
     // bin the measured data (from the list mode file) into planogram
     if(is_listfile) {
         create_measured_planogram( measured_planogram, planogram_size, listfile, basename);
@@ -150,9 +130,11 @@ int main( int argc, const char * argv[] )
         calculate_normalization_correction( measured_planogram, planogram_size);
         printf("finished with normalization procedure.\n");
         return 0;
-    }
-    else {   // read normalization file
-        read_r4_array( normplanogram, planogram_size, "normalization_planogram.img");
+    } else {   // read normalization file
+        normplanogram = calloc(planogram_size, sizeof(float));
+        char normalization_file[255];
+        sprintf( normalization_file, "%s/normalization_planogram.img", path);
+        read_r4_array( normplanogram, planogram_size, normalization_file);
     }
     
     // set up image space
@@ -160,15 +142,13 @@ int main( int argc, const char * argv[] )
     int ybins = round(0.9*detector_distance/0.8);   //  ybins  = 45  (36 mm) we are using 90% of the detector_distance
     int zbins = axial_bins;                     // axial_bins = 117  (93 mm)
     int image_size = xbins * ybins * zbins;
-    float *image;
-    image = calloc( image_size, sizeof(float));
+    float *image = calloc( image_size, sizeof(float));
     
     //initialize image
-    int i, j, k;
     double totalcounts = 0.0;
-    for(i=0; i<planogram_size; i++) totalcounts += measured_planogram[i];
+    for(int i = 0; i<planogram_size; i++) { totalcounts += measured_planogram[i] ; }
     float counts_per_voxel = totalcounts/image_size;
-    for(i=0; i<image_size; i++) image[i] = counts_per_voxel;
+    for(int i = 0; i<image_size; i++) { image[i] = counts_per_voxel; }
     
     // start timer
     // time variables
@@ -181,8 +161,7 @@ int main( int argc, const char * argv[] )
     int image_mask_size =  xbins*ybins*zbins;
     image_mask_size *= segment_count*azimuth_count;
     printf("Size of image mask = %d bytes\n", image_mask_size*2);
-    short int *image_mask;
-    image_mask = calloc( image_mask_size, sizeof(short int));
+    short int *image_mask = calloc( image_mask_size, sizeof(short int));
     create_image_mask( image_mask, xbins, ybins, zbins, normplanogram, planogram_size);
     
     gettimeofday(&tv_start,&tz_start);
@@ -191,24 +170,21 @@ int main( int argc, const char * argv[] )
     printf("create image mask took %10.2lf seconds.\n", elapsed_time);
     double tstart2 = tv_start.tv_sec + 0.000001*tv_start.tv_usec;
     
-    float *est_planogram;
-    est_planogram = calloc(planogram_size, sizeof(float));
-    
-    float *factors;
-    factors = calloc( image_size, sizeof(float));
-    float *weights;
-    weights = calloc( image_size, sizeof(float));
+    float *est_planogram = calloc(planogram_size, sizeof(float));
+    float *factors = calloc( image_size, sizeof(float));
+    float *weights = calloc( image_size, sizeof(float));
     
     // start the cycle over iterations
-    for(i=0; i<iterations; i++) {
+    for(int i=0; i<iterations; i++) {
         forward_project( image, image_mask, xbins, ybins, zbins, est_planogram, planogram_size);
-        sprintf(filename,"estimated projections iteration_%2.2d.raw", i+1);
-        write_r4_array( est_planogram, planogram_size, filename);
         for( int j=0; j< planogram_size; j++) est_planogram[j] *= normplanogram[j];
         back_project( image, image_mask, factors, weights, xbins, ybins, zbins, measured_planogram, est_planogram, planogram_size);
-        sprintf(filename,"estimated image iteration_%2.2d.raw", i+1);
-        write_r4_array( image, xbins*ybins*zbins, filename);
     }
+    
+    sprintf(filename,"%s/estimated projections iteration_%2.2d.raw", path, iterations);
+    write_r4_array( est_planogram, planogram_size, filename);
+    sprintf(filename,"%s/estimated image iteration_%2.2d.raw", path, iterations);
+    write_r4_array( image, xbins*ybins*zbins, filename);
     
     gettimeofday(&tv_start,&tz_start);
     tstop = tv_start.tv_sec + 0.000001*tv_start.tv_usec;
@@ -236,9 +212,10 @@ void  back_project( float *image, short *image_mask, float *factors, float *weig
     double dx, dz;
     int    ctr = 0;
     
+    // convert estimated planogram to ratio of measured to estimated.
     for( int i=0; i< planogram_size; i++) {
-        if((tmp=est_planogram[i]) > 0.01) {
-            est_planogram[i] = measured_planogram[i]/tmp;
+        if((est_planogram[i]) > 0.01) {
+            est_planogram[i] = measured_planogram[i]/est_planogram[i];
         }
         else {
             est_planogram[i] = 0.0;
@@ -877,7 +854,7 @@ int get_crystalindex( int eventblock )
 }
 
 //************************************** parse_command_line **************************
-void parse_command_line(int argc, const char *argv[], char inputfile[], char basename[])
+void parse_command_line(int argc, const char *argv[], char inputfile[], char basename[], char path[])
 {
     // command line must specify list file name first and it must be followed
     //    by the other parameters
@@ -894,6 +871,10 @@ void parse_command_line(int argc, const char *argv[], char inputfile[], char bas
     printf("Filename = %s\n", inputfile);
     // list file or projections?
     // basename = list file name without extension
+    char *filename = strrchr(inputfile, '/');
+    size_t len = strlen(inputfile) - strlen(filename);
+    strncpy( path, inputfile, len);
+    
     char * extension = strstr(inputfile,".bin");
     if(extension == NULL) {  // projection file?
         extension = strstr(inputfile,"_measured_projections.img");
@@ -965,7 +946,7 @@ void parse_command_line(int argc, const char *argv[], char inputfile[], char bas
 }
 
 //************************************** parse_from_stdin **************************
-void parse_from_stdin( char listfile[], char basename[] )
+void parse_from_stdin( char listfile[], char basename[], char path[] )
 {
     // get arguments interactively
     char buf[255];
@@ -973,6 +954,11 @@ void parse_from_stdin( char listfile[], char basename[] )
     fgets( buf, 255, stdin );
     
     if ( sscanf( &buf[0], "%[^\t\n]", &listfile[0]) > 0 ) {
+        
+        char *filename = strrchr(listfile, '/');
+        size_t len = strlen(listfile) - strlen(filename);
+        strncpy( path, listfile, len);
+        
         // basename = list file name without extension
         char * extension = strrchr(listfile,'.');
         if(extension == NULL)
