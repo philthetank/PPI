@@ -43,6 +43,9 @@
 #define ITERATIONS_FLAG 'i'
 #define TEST_FLAG 'T'
 
+#define	MIN(a,b)  ( ((a)<(b)) ? (a) : (b))
+#define	MAX(a,b)  ( ((a)>(b)) ? (a) : (b))
+
 
 //************************************** PROTOTYPES **************************
 void  back_project( float *image, short *image_mask, float *factors, float *weights, int xbins, int ybins, int zbins,
@@ -64,7 +67,7 @@ void    process_2Dprojection_image( char[], char[] );
 int     get_crystalindex( int );
 int     calculate_projection_midplane_index( int, int, double );
 void    sino_coord( double, double, double, double, double, double, double*, double*, double*, double*);
-void    sino_coord_argus( double x1, double x2, double y1, double y2, double z1, double z2, double* r, double* phi, double* theta, double *s);
+float   gaussian( double x, double FWHM);
 
 
 //************************************** GLOBALS **************************
@@ -80,14 +83,12 @@ double  bin_width = 0.8; // == half of crystal pitch
 double  angular_bin_width = 2.1;
 const int radial_bins = 2 * DETECTOR_COLS - 1;
 const int axial_bins = 2 * DETECTOR_ROWS - 1;
-const int projection_size = 51*117; // radial_bins * axial_bins;
-const int azimuth_count = 17;
+const int projection_size = 51*117;  //radial_bins * axial_bins;
+const int azimuth_count = 17;  // could be as high as 51?
 const int segment_count = 39;
 const int span = 3;
 double  voxel_size = 0.8;   // later change it to 0.4 mm
 int     iterations = 50;
-int     min_tilt = 0;
-int     max_tilt = 39;  //segment_count;  // was 39
 int     testing = 0;
 int     is_listfile = 0;
 
@@ -113,27 +114,35 @@ int main( int argc, const char * argv[] )
         return 0;
     }
     
+    if(testing) {
+        const int planogram_size = projection_size * 51 * segment_count;
+        float *normplanogram = calloc(planogram_size, sizeof(float));
+        create_normplanogram( normplanogram, planogram_size);
+        return 0;
+    }
+    
     const int planogram_size = projection_size * azimuth_count * segment_count;
     float *normplanogram;
     float *measured_planogram = calloc(planogram_size, sizeof(float));
-    // bin the measured data (from the list mode file) into planogram
-    if(is_listfile) {
+
+    if(is_listfile) {      // bin the measured data (from the list mode file) into planogram
         create_measured_planogram( measured_planogram, planogram_size, listfile, basename);
     }
-    // or else read the planogram from file
-    else {
+    else {      // read input planogram from file
         read_r4_array( measured_planogram, planogram_size, listfile);
     }
     
+
     // create a "normalization" planogram or else read the normalization from file
     if(process_normalization == 1) {
         calculate_normalization_correction( measured_planogram, planogram_size);
         printf("finished with normalization procedure.\n");
         return 0;
-    } else {   // read normalization file
+    }
+    else {   // read normalization file
         normplanogram = calloc(planogram_size, sizeof(float));
         char normalization_file[255];
-        sprintf( normalization_file, "%s/normalization_planogram.img", path);
+        sprintf( normalization_file, "%snormalization_planogram.img", path);
         read_r4_array( normplanogram, planogram_size, normalization_file);
     }
     
@@ -146,14 +155,14 @@ int main( int argc, const char * argv[] )
     
     //initialize image
     double totalcounts = 0.0;
-    for(int i = 0; i<planogram_size; i++) { totalcounts += measured_planogram[i] ; }
+    for(int i = 0; i<planogram_size; i++) { totalcounts += measured_planogram[i]; }
     float counts_per_voxel = totalcounts/image_size;
     for(int i = 0; i<image_size; i++) { image[i] = counts_per_voxel; }
     
-    // start timer
     // time variables
     struct 	timeval  tv_start;
     struct 	timezone tz_start;
+    // start timer
     gettimeofday( &tv_start, &tz_start);
     double tstart = tv_start.tv_sec + 0.000001*tv_start.tv_usec;
     
@@ -225,7 +234,7 @@ void  back_project( float *image, short *image_mask, float *factors, float *weig
     for( int i=0; i< xbins*ybins*zbins; i++) factors[i]=weights[i]=0.0;
     
     // for all azimuth and tilt angles walk through image and project factors onto image voxel
-    for( int tilt = min_tilt; tilt < max_tilt; tilt++) {      // may want to restrict this to "positive" tilt's
+    for( int tilt = 0; tilt < segment_count; tilt++) {      // may want to restrict this to "positive" tilt's
         if( tilt > segment_count/2)
             dz = (tilt-segment_count) * span * crystal_pitch;
         else
@@ -261,7 +270,7 @@ void  back_project( float *image, short *image_mask, float *factors, float *weig
                         if( fabs(r) > 20.0) continue;
                         double arg = y*y + x*x - r*r;
                         if(arg < 0.0) {
-                            //                          printf("WARNING: tilt=%2d azi=%2d x = %6.3lf y = %6.3lf z = %6.1lf r %6.3lf and arg %6.3lf\n", tilt, azi, x, y, z, r, arg);
+//                          printf("WARNING: tilt=%2d azi=%2d x = %6.3lf y = %6.3lf z = %6.1lf r %6.3lf and arg %6.3lf\n", tilt, azi, x, y, z, r, arg);
                             continue;
                         }
                         if( y < x*tanphi){
@@ -275,6 +284,7 @@ void  back_project( float *image, short *image_mask, float *factors, float *weig
                         r += xcenterbins;
                         s /= bin_width;
                         s += zcenterbins;
+                        
                         // implementing bilinear interpolation here
                         int  ip = floor(r);
                         int  jp = floor(s);
@@ -308,7 +318,7 @@ void  back_project( float *image, short *image_mask, float *factors, float *weig
 }
 
 
-//************************************** create_normalization planogram **************************
+//************************************** calculate normalization correction **************************
 void  calculate_normalization_correction( float *measured_planogram, int planogram_size)
 {
     // measured data have been binned into measured_planogram; now we have to correct the various
@@ -359,7 +369,7 @@ void  calculate_normalization_correction( float *measured_planogram, int planogr
     write_r4_array( &measured_planogram[0], planogram_size, "normalization_planogram.img");
     
 }
-//************************************** create_normplanogram **************************
+//************************************** create measured planogram **************************
 void create_measured_planogram( float *planogram, const int planogram_size, char listfile[], char basename[])
 {   // we reading list mode data file on an event-by-event basis and placing events into projections
     // NOTE: row and columns have been switched compared to previous 2D-Projection mode version
@@ -473,8 +483,10 @@ void create_measured_planogram( float *planogram, const int planogram_size, char
 
 //************************************** create_normplanogram **************************
 void create_normplanogram( float *normplanogram, const int planogram_size)
-{   //we are assigning q count to each line-of-response and bin it into the planogram
+{   // we are assigning one count to each line-of-response and bin it into the planogram
     // this can be used in lieu of a true normalization correction
+    // Main use of this routine is fo evaluation of binning schemes
+    // we can get rid of this routine after initial testing phase is over
     
     char    filename[255];
     double y1 = (detector_distance * (-0.5));
@@ -498,8 +510,9 @@ void create_normplanogram( float *normplanogram, const int planogram_size)
             
             for (int col1 = 0; col1 < DETECTOR_COLS; col1++) {
                 double x1 = (col1 - xcenter) * crystal_pitch;
+                printf("row1=%2d row2=%2d col1=%2d \n", row1, row2, col1);
                 for (int col2 = 0; col2 < DETECTOR_COLS; col2++) {
-                    int azimuth_segment = round( (double) (col2 - col1) / (double) span );
+                    int azimuth_segment = col2 - col1;  // NEW
                     if (azimuth_segment < 0) { azimuth_segment += azimuth_count; }
                     if ( azimuth_segment < 0 || azimuth_segment >= azimuth_count ) {
                         printf("azimuth segment = %d\n", azimuth_segment);
@@ -533,7 +546,7 @@ void create_normplanogram( float *normplanogram, const int planogram_size)
         }
     }
     printf("norm planogram created.\n");
-    sprintf(filename, "norm_planogram.img");
+    sprintf(filename, "test_norm_planogram.img");
     write_r4_array(&normplanogram[0], planogram_size, filename);
 }
 
@@ -588,7 +601,7 @@ void create_image_mask( short int *image_mask, int xbins, int ybins, int zbins, 
                             if(arg > -5.0E-13)
                                 arg = 0.0;
                             else {
-                                printf("WARNING: tilt=%2d azi=%2d sinphi=%8.4lf  cosphi=%8.4lf x = %10.4lf y = %10.4lf z = %7.2lf  r=%10.6lf and arg = %13.9lf\n", tilt, azi, sinphi, cosphi, x, y, z, r, arg*10000.0);
+                                printf("WARNING: tilt=%2d azi=%2d sinphi=%8.4lf cosphi=%8.4lf x= %10.4lf y= %10.4lf z= %7.2lf r=%10.6lf and arg= %13.9lf\n", tilt, azi, sinphi, cosphi, x, y, z, r, arg);
                                 continue;
                             }
                         }
@@ -634,35 +647,37 @@ void forward_project( float *image, short int *image_mask, int xbins, int ybins,
     double xcenterbins = xcenter * crystal_pitch /bin_width;        // = 25
     double zcenterbins = zcenter * crystal_pitch /bin_width;        // = 58
     double temp, theta, phi, x,y,z, r,s;
-    double dx, dz;
+    double dx, dz, FWHM = 1.5;      // FWHM in bin_width units;  1.5 corresponds to 1.2 mm
     int    ctr = 0;
-    int    azi, tilt;
+    float  wtx[radial_bins];
     
     // for all azimuth and tilt angles walk through image and project onto planogram
-    for( tilt = min_tilt; tilt < max_tilt; tilt++) {      // may want to restrict this to "positive" tilt's
+    for( int tilt = 0; tilt < segment_count; tilt++) {      // may want to restrict this to "positive" tilt's
         if( tilt > segment_count/2)
             dz = (tilt-segment_count) * span * crystal_pitch;
         else
             dz = tilt * span * crystal_pitch;
         
-        for( azi = 0; azi < azimuth_count; azi++ ) {
+        for( int azi = 0; azi < azimuth_count; azi++ ) {
             if(azi > azimuth_count/2)
                 dx = (azi - azimuth_count)*span*crystal_pitch;
             else
                 dx = azi*span*crystal_pitch;
-            
             
             phi = atan2( dx, detector_distance);           // azimuth angle ( in rads )
             double sinphi = sin(phi);
             double cosphi = cos(phi);
             double tanphi = dx / detector_distance;
             
-            //            printf("azi = %2d  dx = %8.3lf phi = %8.2lf\n", azi, dx, phi*180.0/M_PI);
-            
             temp = detector_distance * detector_distance + dx * dx;
             theta = atan( dz / sqrt(temp));     // tilt (or polar) angle
             double costheta = cos(theta);
             double sintheta = sin(theta);
+            
+            int plane_index  = (tilt * azimuth_count + azi) * projection_size;
+            int range = round(FWHM)+1;      // FWHM in bin units;
+            int left, right;
+            int top, bottom;
             
             // loop over image space
             for( int k=0; k<zbins; k++) {                       // current voxelsize = 0.8 mm
@@ -702,31 +717,47 @@ void forward_project( float *image, short int *image_mask, int xbins, int ybins,
                         r += xcenterbins;
                         s /= bin_width;
                         s += zcenterbins;
-                        // implementing bilinear interpolation here
                         int  ip = floor(r);
                         int  jp = floor(s);
-                        float fx = r-ip;
-                        float fy = s-jp;
-                        int index = jp * radial_bins + ip;
-                        index += (tilt * azimuth_count + azi) * projection_size;
+
+                        // implementing Gaussian blurring here
+                        left   = MAX((ip-range),0);
+                        right  = MIN(ip+range,radial_bins);
+                        bottom = MAX(jp-range,0);
+                        top    = MIN(jp-range,axial_bins);
+//                        if(ctr < 10) printf("left=%2d  right=%2d  ", left, right);
+                        for( int ii=left; ii<right; ii++) {
+                            wtx[ii] = gaussian(r-ii,FWHM);
+                            if(wtx[ii] < 0.01) {
+                                if(ii<ip) left++;
+                                if(ii>ip) right = ii;
+                            }
+                        }
+//                        if(ctr++ < 10) printf("left=%2d  ip=%2d  right=%2d  n=%2d\n", left, ip, right, right - left);
+
                         int voxel = i + j*xbins+ k*ybins*xbins;
                         float counts  = image[voxel];
-                        if (index < planogram_size && index >= 0){
-                            est_planogram[index]   +=   counts*(1.0-fx)*(1.0-fy);
-                            est_planogram[index+1] +=   counts*fx*(1.0-fy);
-                            est_planogram[index+radial_bins]   +=  counts*(1.0-fx)*fy;
-                            est_planogram[index+radial_bins+1] +=  counts*fx*fy;
-                        } else {
-                            printf("Something is wrong: tilt=%2d azi=%2d x = %6.1lf y = %6.1lf  z = %6.1lf  r %6.3lf and s %6.3lf\n", tilt, azi, x, y, z, r, s);
-                            if(ctr++ > 10) exit(-1);
+                        for( int jj=bottom; jj<top; jj++) {
+                            float wty = gaussian(s-jj,FWHM);
+                            if(wty < 0.01) continue;
+                            for( int ii=left; ii<right; ii++) {
+                                int index = jj * radial_bins + ii;
+                                est_planogram[plane_index+index] += counts*wtx[ii]*wty;
+                            }
                         }
-                        
                     }
                 }
             }
             
         }
     }
+}
+
+//************************************** Gaussian *******************************************
+float gaussian( double x, double FWHM)
+{
+    float result = exp(-2.772589*(x*x/(FWHM*FWHM)))/(1.06447*FWHM);
+    return result;
 }
 
 //************************************** process_projection_image **************************
@@ -799,23 +830,7 @@ void sino_coord( double x1, double x2, double y1, double y2, double z1, double z
     *r /= bin_width;
 }
 
-//************************************** sino_coordinates argus**************************
-void sino_coord_argus( double x1, double x2, double y1, double y2, double z1, double z2, double* r, double* phi, double* theta, double *s)
-{
-    *phi 	= atan2( x2-x1, y2-y1);
-    double cosphi = cos(*phi);
-    double sinphi = sin(*phi);
-    *r		= (x2*cosphi-y2*sinphi)/bin_width;		//! rho is a floating point number
-    
-    double u2 = fabs(x2*sinphi+y2*cosphi);					//! NEW: abs(u2) because u2 can be negative
-    double  u = sqrt((x2-x1)*(x2-x1) + (y2-y1)*(y2-y1));
-    double costheta = u/sqrt(u*u+(z2-z1)*(z2-z1));
-    //    ! 	tantheta = (z2-z1)/u
-    *theta = atan((z2-z1)/u);
-    *s = (z2-u2*(z2-z1)/u)*costheta;
-    *s /= bin_width;
-    
-}
+
 //************************************** calculate_projection_midplane_index **************************
 int calculate_projection_midplane_index( int crystalindex1, int crystalindex2, double acceptance_radius2 )
 {
@@ -871,9 +886,15 @@ void parse_command_line(int argc, const char *argv[], char inputfile[], char bas
     printf("Filename = %s\n", inputfile);
     // list file or projections?
     // basename = list file name without extension
-    char *filename = strrchr(inputfile, '/');
-    size_t len = strlen(inputfile) - strlen(filename);
-    strncpy( path, inputfile, len);
+    char *filename;
+    filename = strrchr(inputfile, '/');
+    if(filename != NULL) {
+        size_t len = strlen(inputfile) - strlen(filename);
+        strncpy( path, inputfile, len);
+    }
+    else {
+        sprintf(path, "");
+    }
     
     char * extension = strstr(inputfile,".bin");
     if(extension == NULL) {  // projection file?
