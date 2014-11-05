@@ -43,8 +43,8 @@
 #define ITERATIONS_FLAG 'i'
 #define TEST_FLAG 'T'
 
-#define	MIN(a,b)  ( ((a)<(b)) ? (a) : (b))
-#define	MAX(a,b)  ( ((a)>(b)) ? (a) : (b))
+//#define	MIN(a,b)  ( ((a)<(b)) ? (a) : (b))
+//#define	MAX(a,b)  ( ((a)>(b)) ? (a) : (b))
 
 
 //************************************** PROTOTYPES **************************
@@ -186,15 +186,22 @@ int main( int argc, const char * argv[] )
     // start the cycle over iterations
     for(int i=0; i<iterations; i++) {
         forward_project( image, image_mask, xbins, ybins, zbins, est_planogram, planogram_size);
+
+        sprintf(filename,"%sestimated projections iteration_%2.2d.raw", path, i+1);
+        write_r4_array( est_planogram, planogram_size, filename);
+
         for( int j=0; j< planogram_size; j++) est_planogram[j] *= normplanogram[j];
+
         back_project( image, image_mask, factors, weights, xbins, ybins, zbins, measured_planogram, est_planogram, planogram_size);
+        sprintf(filename,"%sestimated image iteration_%2.2d.raw", path, i+1);
+        write_r4_array( image, xbins*ybins*zbins, filename);
     }
     
-    sprintf(filename,"%s/estimated projections iteration_%2.2d.raw", path, iterations);
+/*    sprintf(filename,"%sestimated projections iteration_%2.2d.raw", path, iterations);
     write_r4_array( est_planogram, planogram_size, filename);
-    sprintf(filename,"%s/estimated image iteration_%2.2d.raw", path, iterations);
+    sprintf(filename,"%sestimated image iteration_%2.2d.raw", path, iterations);
     write_r4_array( image, xbins*ybins*zbins, filename);
-    
+*/
     gettimeofday(&tv_start,&tz_start);
     tstop = tv_start.tv_sec + 0.000001*tv_start.tv_usec;
     printf("\n%2d iteration(s) took %10.2lf seconds.\n", iterations, tstop-tstart2);
@@ -216,10 +223,9 @@ void  back_project( float *image, short *image_mask, float *factors, float *weig
     double zcenter = (DETECTOR_ROWS - 1) * 0.5;
     double xcenterbins = xcenter * crystal_pitch /bin_width;
     double zcenterbins = zcenter * crystal_pitch /bin_width;
-    float  tmp;
     double temp, theta, phi, x,y,z, r,s;
-    double dx, dz;
-    int    ctr = 0;
+    double dx, dz, FWHM=1.5;        // FWHM in bins  = 1.5*0.8 mm = 1.2 mm
+    float  wtx[radial_bins];
     
     // convert estimated planogram to ratio of measured to estimated.
     for( int i=0; i< planogram_size; i++) {
@@ -255,7 +261,12 @@ void  back_project( float *image, short *image_mask, float *factors, float *weig
             theta = atan( dz / sqrt(temp));     // tilt (or polar) angle
             double costheta = cos(theta);
             double sintheta = sin(theta);
-            
+
+            int plane_index  = (tilt * azimuth_count + azi) * projection_size;
+            int range = round(FWHM)+1;      // FWHM in bin units;
+            int left, right;
+            int top, bottom;
+
             for( int k=0; k<zbins; k++) {                       // current voxelsize = 0.8 mm
                 z = (k - zbins/2) * voxel_size;                 // z-coordinate of voxel in mm;  zbins/2 = 58;
                 for( int j=0; j<ybins; j++) {
@@ -284,30 +295,41 @@ void  back_project( float *image, short *image_mask, float *factors, float *weig
                         r += xcenterbins;
                         s /= bin_width;
                         s += zcenterbins;
-                        
-                        // implementing bilinear interpolation here
                         int  ip = floor(r);
                         int  jp = floor(s);
-                        float fx = r-ip;
-                        float fy = s-jp;
-                        int index = jp * radial_bins + ip;
-                        index += (tilt * azimuth_count + azi) * projection_size;
-                        int voxel = i + j*xbins+ k*ybins*xbins;
-                        if (index < planogram_size && index >= 0){
-                            tmp =  est_planogram[index] * (1.0-fx)*(1.0-fy);
-                            tmp += est_planogram[index+1] * fx*(1.0-fy);
-                            tmp += est_planogram[index+radial_bins] * (1.0-fx)*fy;
-                            tmp += est_planogram[index+radial_bins+1] * (fx*fy);
-                            factors[voxel] += tmp;
-                            weights[voxel] += 1.0;
-                        } else {
-                            printf("Something is wrong: tilt=%2d azi=%2d x = %6.1lf y = %6.1lf  z = %6.1lf  r %6.3lf and s %6.3lf\n", tilt, azi, x, y, z, r, s);
-                            if(ctr++ > 10) exit(-1);
+                        
+                        // implementing Gaussian blurring here
+                        left   = MAX((ip-range), 0);
+                        right  = MIN((ip+range), radial_bins);
+                        bottom = MAX((jp-range), 0);
+                        top    = MIN((jp+range), axial_bins);
+        //                        if(ctr < 10) printf("left=%2d  right=%2d  ", left, right);
+                        for( int ii=left; ii<right; ii++) {
+                            wtx[ii] = gaussian(r-ii,FWHM);
+                            if(wtx[ii] < 0.01) {
+                                if(ii<ip) left++;
+                                if(ii>ip) right = ii;
+                            }
                         }
+        //                        if(ctr++ < 10) printf("left=%2d  ip=%2d  right=%2d  n=%2d\n", left, ip, right, right - left);
+
+                        float tmp = 0.0;
+                        float ttt = 0.0;
+                        for( int jj=bottom; jj<top; jj++) {
+                            float wty = gaussian(s-jj,FWHM);
+                            if(wty < 0.01) continue;
+                            for( int ii=left; ii<right; ii++) {
+                                int index = jj * radial_bins + ii;
+                                tmp += est_planogram[plane_index+index]*wtx[ii]*wty;
+                                ttt += wtx[ii]*wty;
+                            }
+                        }
+                        int voxel = i + j*xbins+ k*ybins*xbins;
+                        factors[voxel] += tmp;
+                        weights[voxel] += ttt;
                     }
                 }
             }
-            
         }
     }
     
@@ -721,10 +743,10 @@ void forward_project( float *image, short int *image_mask, int xbins, int ybins,
                         int  jp = floor(s);
 
                         // implementing Gaussian blurring here
-                        left   = MAX((ip-range),0);
+                        left   = MAX((ip-range), 0);
                         right  = MIN(ip+range,radial_bins);
-                        bottom = MAX(jp-range,0);
-                        top    = MIN(jp-range,axial_bins);
+                        bottom = MAX(jp-range, 0);
+                        top    = MIN(jp+range, axial_bins);
 //                        if(ctr < 10) printf("left=%2d  right=%2d  ", left, right);
                         for( int ii=left; ii<right; ii++) {
                             wtx[ii] = gaussian(r-ii,FWHM);
