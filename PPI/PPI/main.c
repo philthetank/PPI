@@ -43,8 +43,8 @@
 #define ITERATIONS_FLAG 'i'
 #define TEST_FLAG 'T'
 
-//#define	MIN(a,b)  ( ((a)<(b)) ? (a) : (b))
-//#define	MAX(a,b)  ( ((a)>(b)) ? (a) : (b))
+#define	MIN(a,b)  ( ((a)<(b)) ? (a) : (b))
+#define	MAX(a,b)  ( ((a)>(b)) ? (a) : (b))
 
 
 //************************************** PROTOTYPES **************************
@@ -88,7 +88,7 @@ const int azimuth_count = 17;  // could be as high as 51?
 const int segment_count = 39;
 const int span = 3;
 double  voxel_size = 0.8;   // later change it to 0.4 mm
-int     iterations = 50;
+int     iterations = 10;
 int     testing = 0;
 int     is_listfile = 0;
 
@@ -172,41 +172,34 @@ int main( int argc, const char * argv[] )
     printf("Size of image mask = %d bytes\n", image_mask_size*2);
     short int *image_mask = calloc( image_mask_size, sizeof(short int));
     create_image_mask( image_mask, xbins, ybins, zbins, normplanogram, planogram_size);
-    
     gettimeofday(&tv_start,&tz_start);
     double tstop = tv_start.tv_sec + 0.000001*tv_start.tv_usec;
-    double elapsed_time = tstop - tstart;
-    printf("create image mask took %10.2lf seconds.\n", elapsed_time);
-    double tstart2 = tv_start.tv_sec + 0.000001*tv_start.tv_usec;
+    printf("create image mask took %10.2lf seconds.\n", tstop - tstart);
     
     float *est_planogram = calloc(planogram_size, sizeof(float));
     float *factors = calloc( image_size, sizeof(float));
     float *weights = calloc( image_size, sizeof(float));
     
+    // start the clock again
+    tstart = tv_start.tv_sec + 0.000001*tv_start.tv_usec;
+    
     // start the cycle over iterations
     for(int i=0; i<iterations; i++) {
         forward_project( image, image_mask, xbins, ybins, zbins, est_planogram, planogram_size);
-
-        sprintf(filename,"%sestimated projections iteration_%2.2d.raw", path, i+1);
-        write_r4_array( est_planogram, planogram_size, filename);
-
         for( int j=0; j< planogram_size; j++) est_planogram[j] *= normplanogram[j];
-
         back_project( image, image_mask, factors, weights, xbins, ybins, zbins, measured_planogram, est_planogram, planogram_size);
-        sprintf(filename,"%sestimated image iteration_%2.2d.raw", path, i+1);
-        write_r4_array( image, xbins*ybins*zbins, filename);
     }
-    
-/*    sprintf(filename,"%sestimated projections iteration_%2.2d.raw", path, iterations);
+ 
+    gettimeofday(&tv_start,&tz_start);
+    tstop = tv_start.tv_sec + 0.000001*tv_start.tv_usec;
+    printf("\n%2d iteration(s) took %10.2lf seconds.\n", iterations, tstop-tstart);
+   
+    sprintf(filename,"%sestimated projections iteration_%2.2d.raw", path, iterations);
     write_r4_array( est_planogram, planogram_size, filename);
     sprintf(filename,"%sestimated image iteration_%2.2d.raw", path, iterations);
     write_r4_array( image, xbins*ybins*zbins, filename);
-*/
-    gettimeofday(&tv_start,&tz_start);
-    tstop = tv_start.tv_sec + 0.000001*tv_start.tv_usec;
-    printf("\n%2d iteration(s) took %10.2lf seconds.\n", iterations, tstop-tstart2);
+
     printf("\ndone!\n");
-    
     printf("Finished with PLATO code.\n\n");
     return 0;
 }
@@ -900,26 +893,28 @@ void parse_command_line(int argc, const char *argv[], char inputfile[], char bas
     if(argc <= 1) {
         terminate_with_error("Not enough arguments to find filename!");
     }
-    
+
     if( sscanf( &argv[1][0], "%[^\t\n]", &inputfile[0]) <= 0 ) {
         terminate_with_error("No luck parsing command line for filename!");
     }
     
     printf("Filename = %s\n", inputfile);
-    // list file or projections?
-    // basename = list file name without extension
+// figure out the path
     char *filename;
     filename = strrchr(inputfile, '/');
     if(filename != NULL) {
         size_t len = strlen(inputfile) - strlen(filename);
-        strncpy( path, inputfile, len);
+        strncpy( path, inputfile, len+1);
+        printf("path = %s\n", path);
     }
     else {
         sprintf(path, "");
     }
     
+    // list file or projections?
+    // basename = list file name without extension
     char * extension = strstr(inputfile,".bin");
-    if(extension == NULL) {  // projection file?
+    if(extension == NULL) {  // must be a projection file?
         extension = strstr(inputfile,"_measured_projections.img");
         if(extension == NULL) {
             terminate_with_error("No luck parsing command line for proper extension!");
@@ -929,14 +924,14 @@ void parse_command_line(int argc, const char *argv[], char inputfile[], char bas
             strncpy( basename, inputfile, len);
         }
     }
-    else {
-        // len is the length of the basename
+    else {  // we have a listfile with .bin extension
+            // len is the length of the basename
         size_t len = strlen(inputfile) - strlen(extension);
         strncpy( basename, inputfile, len);
         is_listfile = 1;
     }
     printf("basename = %s  extension = %s\n", basename, extension);
-    
+   
     for (int i=2; i<argc; i++) {
         if (argv[i][0] == '-') {
             switch(argv[i][1]) {
@@ -988,7 +983,7 @@ void parse_command_line(int argc, const char *argv[], char inputfile[], char bas
     }
 }
 
-//************************************** parse_from_stdin **************************
+//************************************** parse_from_stdin *******************************************
 void parse_from_stdin( char listfile[], char basename[], char path[] )
 {
     // get arguments interactively
@@ -1000,12 +995,21 @@ void parse_from_stdin( char listfile[], char basename[], char path[] )
         
         char *filename = strrchr(listfile, '/');
         size_t len = strlen(listfile) - strlen(filename);
-        strncpy( path, listfile, len);
+        strncpy( path, listfile, len+1);
+        printf("path = %s\n", path);
         
         // basename = list file name without extension
-        char * extension = strrchr(listfile,'.');
-        if(extension == NULL)
-            strcpy( basename, listfile);
+        char * extension = strstr(listfile,".bin");
+        if(extension == NULL) {
+            extension = strstr(listfile,"_measured_projections.img");
+            if(extension == NULL) {
+                terminate_with_error("No luck parsing command line for proper extension!");
+            }
+            else {
+                size_t len = strlen(listfile) - strlen(extension);
+                strncpy( basename, listfile, len);
+            }
+        }
         else {
             // len is the length of the basename
             size_t len = strlen(listfile) - strlen(extension);
